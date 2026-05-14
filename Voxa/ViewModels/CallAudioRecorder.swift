@@ -15,6 +15,9 @@ final class CallAudioRecorder {
     @ObservationIgnored
     private var chunkWriter: LocalAudioChunkWriter?
 
+    /// Fired on the tap queue for every buffer (same stream as chunk writer). Keep work minimal.
+    @ObservationIgnored nonisolated(unsafe) var onLiveBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)?
+
     @ObservationIgnored
     private var audioLevels: [AudioLevel] = []
     private var lastAutoModeBarTime: DispatchTime?
@@ -56,6 +59,7 @@ final class CallAudioRecorder {
 
     func stop(userInitiated: Bool = false) {
         isRecording = false
+        onLiveBuffer = nil
         visualDetector?.stopLiveAudioBufferStream()
         liveBufferQueue.sync { [chunkWriter] in
             chunkWriter?.flush()
@@ -102,6 +106,7 @@ final class CallAudioRecorder {
         let chunkSink: LocalAudioChunkWriter? = chunkWriter
         var callbackCounter = 0
         let startError = visualDetector.startLiveAudioBufferStream(.all, queue: liveBufferQueue) { [weak self] buffer in
+            self?.onLiveBuffer?(buffer)
             chunkSink?.append(buffer: buffer)
             callbackCounter += 1
             let shouldProcessAudio = callbackCounter % 4 == 0

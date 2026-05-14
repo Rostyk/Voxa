@@ -1,10 +1,12 @@
 import AVFoundation
 import AppKit
+import Speech
 import SwiftUI
 import VoxaSDK
 
 struct ContentView: View {
     @State private var callViewModel = CallViewModel.shared
+    @State private var conversationViewModel = ConversationViewModel()
     @State private var micGranted = false
     @State private var systemAudioGranted = false
     @State private var permissionMessage: String?
@@ -36,6 +38,8 @@ struct ContentView: View {
                     )
                     .frame(height: 60)
                     .frame(maxWidth: .infinity)
+
+                    ConversationTranscriptView(state: conversationViewModel.state)
                 }
             }
 
@@ -45,6 +49,21 @@ struct ContentView: View {
         .frame(minWidth: 480, minHeight: 280)
         .task {
             await requestPermissionsAndStart()
+        }
+        .onChange(of: callViewModel.isRecording) { _, recording in
+            guard micGranted, systemAudioGranted else { return }
+            guard let recorder = callViewModel.recorder else { return }
+            if recording {
+                conversationViewModel.bindToRecorder(recorder)
+            } else {
+                conversationViewModel.unbind(from: recorder)
+            }
+        }
+        .onAppear {
+            guard micGranted, systemAudioGranted else { return }
+            if callViewModel.isRecording, let recorder = callViewModel.recorder {
+                conversationViewModel.bindToRecorder(recorder)
+            }
         }
     }
 
@@ -137,6 +156,19 @@ struct ContentView: View {
             permissionPhase = ""
             permissionMessage = nil
             callViewModel.activate()
+        }
+
+        let speechOK = await requestSpeechAuthorization()
+        await MainActor.run {
+            conversationViewModel.setSpeechAuthorized(speechOK)
+        }
+    }
+
+    private func requestSpeechAuthorization() async -> Bool {
+        await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status == .authorized)
+            }
         }
     }
 

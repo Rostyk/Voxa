@@ -410,6 +410,7 @@
 				INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Voxa captures system audio output to show levels while a supported call app is using the microphone.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Voxa uses the microphone permission together with system audio capture to detect when call apps are active and visualize audio.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Voxa transcribes call audio on device so you can read the conversation as it happens.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -445,6 +446,7 @@
 				INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Voxa captures system audio output to show levels while a supported call app is using the microphone.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Voxa uses the microphone permission together with system audio capture to detect when call apps are active and visualize audio.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Voxa transcribes call audio on device so you can read the conversation as it happens.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
