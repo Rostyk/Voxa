@@ -186,7 +186,12 @@ final class ConversationViewModel {
             print("[ConversationViewModel] mergeSupersededCaption skipped — not the most recent committed turn")
             return
         }
-        guard Self.transcriptsLikelySameTurn(last.text, transcript) else { return }
+        guard TranscriptTurnMatch.likelySameTurn(committed: last.text, inflight: transcript) else {
+            print(
+                "[ConversationViewModel] mergeSupersededCaption skipped — inflight transcript does not pair with committed line (anti-spoof turn match)"
+            )
+            return
+        }
         let newCorrected = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
         let newTranslation = translation.trimmingCharacters(in: .whitespacesAndNewlines)
         let mergedCorrected: String? = newCorrected.isEmpty ? last.gptCorrected : newCorrected
@@ -205,15 +210,6 @@ final class ConversationViewModel {
         print(
             "[ConversationViewModel] mergeSupersededCaptionIntoTurn turnID=\(turnID) transcriptChars=\(transcript.count) hadTranslation=\(last.gptTranslation != nil)"
         )
-    }
-
-    private static func transcriptsLikelySameTurn(_ committed: String, _ requestText: String) -> Bool {
-        let a = committed.trimmingCharacters(in: .whitespacesAndNewlines)
-        let b = requestText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !a.isEmpty, !b.isEmpty else { return false }
-        if a == b { return true }
-        if a.contains(b) || b.contains(a) { return true }
-        return false
     }
 
     private static func commitLogPreview(_ text: String, maxLen: Int = 64) -> String {

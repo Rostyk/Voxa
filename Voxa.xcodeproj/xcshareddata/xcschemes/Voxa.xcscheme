@@ -54,12 +54,17 @@
          <EnvironmentVariable
             key = "OPEN_AI_KEY"
             value = ""
-            isEnabled = "YES">
+            isEnabled = "NO">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "OPENAI_API_KEY"
+            value = ""
+            isEnabled = "NO">
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "GOOGLE_TRANSLATE_KEY"
-            value = "AIzaSyDIgJErDV0phbp4vGDNErdX9Hxq9FKWUbM"
-            isEnabled = "YES">
+            value = ""
+            isEnabled = "NO">
          </EnvironmentVariable>
       </EnvironmentVariables>
    </LaunchAction>

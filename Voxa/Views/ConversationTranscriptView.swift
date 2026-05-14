@@ -348,6 +348,14 @@ private struct LiveTranslationPanel: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            if let err = caption.translationLastError?.trimmingCharacters(in: .whitespacesAndNewlines), !err.isEmpty {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -4,12 +4,11 @@ enum OpenAIConfiguration: Sendable {
     static let chatCompletionsURL = URL(string: "https://api.openai.com/v1/chat/completions")!
 
     /// Model for live caption correction + translation.
-    /// - Default: `gpt-5-nano` (OpenAI: fastest / most cost-efficient GPT‑5; Chat Completions supported).
-    /// - OYD (`RemoteAIService`) uses `gpt-4o-mini` on the **Responses** API as a fast non‑reasoning choice.
-    /// - Override: set env `GPT_MODEL` (e.g. `gpt-4o-mini`) if your key/org does not expose nano yet.
+    /// - Default: `gpt-4o` (stronger reasoning for noisy live-call ASR than mini).
+    /// - Override: env `GPT_MODEL` (e.g. `gpt-4o-mini` for cost/latency, or org-specific GPT‑5 ids).
     static func chatCaptionModel() -> String {
         let raw = ProcessInfo.processInfo.environment["GPT_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return raw.isEmpty ? "gpt-5-nano" : raw
+        return raw.isEmpty ? "gpt-4o" : raw
     }
 
     /// GPT‑5 counts **reasoning** + visible text inside `max_completion_tokens`. Too low (e.g. 512) can spend the entire budget on reasoning, leaving `content` empty and `finish_reason: "length"`.
@@ -23,10 +22,15 @@ enum OpenAIConfiguration: Sendable {
         return raw.isEmpty ? "minimal" : raw
     }
 
-    /// OpenAI key from the process environment (e.g. Xcode Scheme → `OPEN_AI_KEY`).
+    /// OpenAI key: `OPEN_AI_KEY` (Voxa convention) or `OPENAI_API_KEY` (common tooling default).
+    /// Only the **runtime** process environment is read — xcconfig values are **not** visible here unless
+    /// the scheme passes them (Edit Scheme → Run → Environment) or you launch from a shell with `export`.
     static func apiKey() -> String? {
-        guard let raw = ProcessInfo.processInfo.environment["OPEN_AI_KEY"] else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        for name in ["OPEN_AI_KEY", "OPENAI_API_KEY"] {
+            guard let raw = ProcessInfo.processInfo.environment[name] else { continue }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return nil
     }
 }

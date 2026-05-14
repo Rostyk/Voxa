@@ -92,7 +92,7 @@ final class LocalAudioChunkWriter {
     }
 
     private func writeWavData(_ wavData: Data) {
-        chunkSequence += 1
+        /*chunkSequence += 1
         let stamp = Int(Date().timeIntervalSince1970)
         let name = String(format: "chunk_%06d_%d.wav", chunkSequence, stamp)
         let url = outputDirectory.appendingPathComponent(name)
@@ -101,12 +101,12 @@ final class LocalAudioChunkWriter {
             print("[LocalAudioChunkWriter] wrote \(url.path) (\(wavData.count) bytes)")
         } catch {
             print("[LocalAudioChunkWriter] write failed: \(error.localizedDescription)")
-        }
+        }*/
     }
 
     /// Aurigin `CallAuthSignatureViewModel.appendPCMBuffer`–style packing, downmixed to mono floats.
     private static func appendTapAsMonoFloatData(buffer: AVAudioPCMBuffer, to data: inout Data) {
-        guard buffer.format.commonFormat == .pcmFormatFloat32, let fcd = buffer.floatChannelData else { return }
+       /* guard buffer.format.commonFormat == .pcmFormatFloat32, let fcd = buffer.floatChannelData else { return }
         let frameLength = Int(buffer.frameLength)
         let channelCount = Int(buffer.format.channelCount)
         let stride = buffer.stride
@@ -141,7 +141,7 @@ final class LocalAudioChunkWriter {
                 }
                 appendLittleEndianFloat(sum / Float(channelCount), to: &data)
             }
-        }
+        }*/
     }
 
     private static func appendLittleEndianFloat(_ value: Float, to data: inout Data) {

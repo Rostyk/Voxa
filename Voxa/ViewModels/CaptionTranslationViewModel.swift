@@ -53,10 +53,10 @@ final class CaptionTranslationViewModel {
         _translationLocaleIdentifier = Self.resolvedTranslationLocaleIdentifier(Locale.current.identifier)
 
         if let openAIKey = OpenAIConfiguration.apiKey() {
-            print("[Caption] OPEN_AI_KEY present length=\(openAIKey.count) — ChatGPT path available")
+            print("[Caption] OpenAI API key present length=\(openAIKey.count) (OPEN_AI_KEY or OPENAI_API_KEY) — ChatGPT path available")
             gptCaptionService = GPTCaptionTranslationService(client: OpenAIRestClient(apiKey: openAIKey))
         } else {
-            print("[Caption] OpenAI key missing — ChatGPT path disabled")
+            print("[Caption] OpenAI key missing — ChatGPT path disabled (set OPEN_AI_KEY or OPENAI_API_KEY in the Run scheme or shell environment; xcconfig alone is not enough)")
             gptCaptionService = nil
         }
 
@@ -76,7 +76,7 @@ final class CaptionTranslationViewModel {
         case .gpt:
             translationLastError =
                 gptCaptionService == nil
-                ? "Set OPEN_AI_KEY in the run scheme for ChatGPT translation (platform.openai.com/api-keys)."
+                ? "Set OPEN_AI_KEY or OPENAI_API_KEY in the Run scheme (or export before launch) for ChatGPT translation."
                 : nil
         case .googleTranslate:
             translationLastError =
@@ -198,8 +198,10 @@ final class CaptionTranslationViewModel {
                     "[Caption] translate STALE id=\(requestID) latest=\(latestRequestID) wall=\(String(format: "%.3f", wall))s corrected=\"\(Self.oneLine(payload.corrected))\" translation=\"\(Self.oneLine(payload.translation))\""
                 )
                 if let anchor = lateCaptionAnchor,
-                    Self.transcriptsLikelySameTurn(anchor.committedTranscript, text) {
+                    TranscriptTurnMatch.likelySameTurn(committed: anchor.committedTranscript, inflight: text) {
                     onSupersededTranslation?(anchor.turnID, text, payload.corrected, payload.translation)
+                } else if lateCaptionAnchor != nil {
+                    print("[Caption] translate STALE — superseded merge skipped (committed vs inflight pairing rejected)")
                 }
                 return
             }
@@ -240,12 +242,4 @@ final class CaptionTranslationViewModel {
         return String(oneLine[..<idx]) + "…"
     }
 
-    private static func transcriptsLikelySameTurn(_ committed: String, _ requestText: String) -> Bool {
-        let a = committed.trimmingCharacters(in: .whitespacesAndNewlines)
-        let b = requestText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !a.isEmpty, !b.isEmpty else { return false }
-        if a == b { return true }
-        if a.contains(b) || b.contains(a) { return true }
-        return false
-    }
 }

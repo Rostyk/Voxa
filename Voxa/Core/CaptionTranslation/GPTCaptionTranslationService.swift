@@ -25,7 +25,10 @@ final class GPTCaptionTranslationService: LiveCaptionTranslationServicing, @unch
             targetLanguageLabel: targetLabel
         )
 
-        print("[GPT] GPTCaptionTranslationService messages=\(chatRequest.messages.count) contextChars=\(callContextNotes.count) transcriptChars=\(transcript.count)")
+        print(
+            "[GPT] live_call_transcription request model=\(chatRequest.model) target=\"\(targetLabel)\" contextChars=\(callContextNotes.count) transcriptChars=\(transcript.count)"
+        )
+        print("[GPT] GPTCaptionTranslationService messages=\(chatRequest.messages.count)")
         for (index, message) in chatRequest.messages.enumerated() {
             print(
                 "[GPT] prompt message[\(index)] role=\(message.role) (\(message.content.count) chars)\n---BEGIN \(message.role.uppercased())---\n\(message.content)\n---END \(message.role.uppercased())---"
