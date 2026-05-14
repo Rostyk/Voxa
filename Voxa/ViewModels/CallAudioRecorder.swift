@@ -9,7 +9,7 @@ final class CallAudioRecorder {
     private static let visualizationBarCount: CGFloat = 100
     private static let saveLiveAudioChunksToDisk = true
 
-    private var visualDetector: VoxaSystemAudio?
+    private var visualDetector: VoxaAudioKit?
     private let liveBufferQueue = DispatchQueue(label: "CallAudioRecorder.LiveBuffer", qos: .userInitiated)
 
     @ObservationIgnored
@@ -93,7 +93,7 @@ final class CallAudioRecorder {
 
     private func startLiveVisualizationStream() {
         if visualDetector == nil {
-            visualDetector = VoxaSystemAudio()
+            visualDetector = VoxaAudioKit()
         }
         guard let visualDetector else {
             print("[CallAudioRecorder] visualDetector is nil")

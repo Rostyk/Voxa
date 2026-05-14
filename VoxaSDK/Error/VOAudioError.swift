@@ -1,6 +1,6 @@
 import Foundation
 
-public enum AUAudioError: LocalizedError {
+public enum VOAudioError: LocalizedError {
     case processTapCreationFailed(String)
     case aggregateDeviceCreationFailed(String)
     case tapNotActivated

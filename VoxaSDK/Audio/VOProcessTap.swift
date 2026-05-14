@@ -1,12 +1,12 @@
-import Foundation
-import CoreAudio
 import AVFoundation
+import CoreAudio
+import Foundation
 
-final class AUProcessTap {
+final class VOProcessTap {
 
-    typealias InvalidationHandler = (AUProcessTap) -> Void
+    typealias InvalidationHandler = (VOProcessTap) -> Void
 
-    let process: AUAudioProcess?
+    let process: VOAudioProcess?
     private let objectIDs: [AudioObjectID]
     private let aggregateName: String
     let muteWhenRunning: Bool
@@ -20,7 +20,7 @@ final class AUProcessTap {
     private(set) var tapStreamDescription: AudioStreamBasicDescription?
     private var invalidationHandler: InvalidationHandler?
 
-    init(process: AUAudioProcess, muteWhenRunning: Bool = false) {
+    init(process: VOAudioProcess, muteWhenRunning: Bool = false) {
         self.process = process
         self.objectIDs = [process.objectID]
         self.aggregateName = "Tap-\(process.id)"
@@ -82,7 +82,7 @@ final class AUProcessTap {
 
         guard !objectIDs.isEmpty else {
             errorMessage = "No process object IDs to tap"
-            throw AUAudioError.processTapCreationFailed("No process object IDs")
+            throw VOAudioError.processTapCreationFailed("No process object IDs")
         }
 
         let tapDescription = CATapDescription(stereoMixdownOfProcesses: objectIDs)
@@ -94,13 +94,13 @@ final class AUProcessTap {
 
         guard err == noErr else {
             errorMessage = "Process tap creation failed with error \(err)"
-            throw AUAudioError.processTapCreationFailed("Error code: \(err)")
+            throw VOAudioError.processTapCreationFailed("Error code: \(err)")
         }
 
         processTapID = tapID
 
-        let systemOutputID = try AUAudioUtils.readDefaultSystemOutputDevice()
-        let outputUID = try AUAudioUtils.readDeviceUID(deviceID: systemOutputID)
+        let systemOutputID = try VOAudioUtils.readDefaultSystemOutputDevice()
+        let outputUID = try VOAudioUtils.readDeviceUID(deviceID: systemOutputID)
         let aggregateUID = UUID().uuidString
 
         let description: [String: Any] = [
@@ -121,29 +121,29 @@ final class AUProcessTap {
             ]
         ]
 
-        tapStreamDescription = try AUAudioUtils.readAudioTapStreamDescription(tapID: tapID)
+        tapStreamDescription = try VOAudioUtils.readAudioTapStreamDescription(tapID: tapID)
 
         aggregateDeviceID = AudioObjectID.unknown
         err = AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggregateDeviceID)
 
         guard err == noErr else {
-            throw AUAudioError.aggregateDeviceCreationFailed("Error code: \(err)")
+            throw VOAudioError.aggregateDeviceCreationFailed("Error code: \(err)")
         }
     }
 
-    func run(on queue: DispatchQueue, bufferCallback: @escaping AUAudioProcessesTapCallback, invalidationHandler: @escaping InvalidationHandler) throws {
-        guard activated else { throw AUAudioError.tapNotActivated }
-        guard self.invalidationHandler == nil else { throw AUAudioError.tapAlreadyRunning }
+    func run(on queue: DispatchQueue, bufferCallback: @escaping (AVAudioPCMBuffer) -> Void, invalidationHandler: @escaping InvalidationHandler) throws {
+        guard activated else { throw VOAudioError.tapNotActivated }
+        guard self.invalidationHandler == nil else { throw VOAudioError.tapAlreadyRunning }
 
         errorMessage = nil
         self.invalidationHandler = invalidationHandler
 
         guard var streamDescription = tapStreamDescription else {
-            throw AUAudioError.invalidStreamDescription
+            throw VOAudioError.invalidStreamDescription
         }
 
         guard let format = AVAudioFormat(streamDescription: &streamDescription) else {
-            throw AUAudioError.failedToCreateAudioFormat
+            throw VOAudioError.failedToCreateAudioFormat
         }
 
         let ioBlock: AudioDeviceIOBlock = { [weak self] _, inInputData, _, _, _ in
@@ -158,12 +158,12 @@ final class AUProcessTap {
 
         var err = AudioDeviceCreateIOProcIDWithBlock(&deviceProcID, aggregateDeviceID, queue, ioBlock)
         guard err == noErr else {
-            throw AUAudioError.deviceIOProcCreationFailed("Error code: \(err)")
+            throw VOAudioError.deviceIOProcCreationFailed("Error code: \(err)")
         }
 
         err = AudioDeviceStart(aggregateDeviceID, deviceProcID)
         guard err == noErr else {
-            throw AUAudioError.deviceStartFailed("Error code: \(err)")
+            throw VOAudioError.deviceStartFailed("Error code: \(err)")
         }
     }
 

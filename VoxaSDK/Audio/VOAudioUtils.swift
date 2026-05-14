@@ -10,7 +10,7 @@ extension AudioObjectID {
     var isValid: Bool { !isUnknown }
 }
 
-struct AUAudioUtils {
+struct VOAudioUtils {
 
     static func readProcessList() throws -> [AudioObjectID] {
         var address = AudioObjectPropertyAddress(
@@ -23,14 +23,14 @@ struct AUAudioUtils {
         var err = AudioObjectGetPropertyDataSize(AudioObjectID.system, &address, 0, nil, &dataSize)
 
         guard err == noErr else {
-            throw AUAudioError.processTapCreationFailed("Error reading process list data size: \(err)")
+            throw VOAudioError.processTapCreationFailed("Error reading process list data size: \(err)")
         }
 
         var value = [AudioObjectID](repeating: .unknown, count: Int(dataSize) / MemoryLayout<AudioObjectID>.size)
         err = AudioObjectGetPropertyData(AudioObjectID.system, &address, 0, nil, &dataSize, &value)
 
         guard err == noErr else {
-            throw AUAudioError.processTapCreationFailed("Error reading process list: \(err)")
+            throw VOAudioError.processTapCreationFailed("Error reading process list: \(err)")
         }
 
         return value
@@ -102,7 +102,7 @@ struct AUAudioUtils {
 
         var err = AudioObjectGetPropertyDataSize(objectID, &address, 0, nil, &dataSize)
         guard err == noErr else {
-            throw AUAudioError.processTapCreationFailed("Error reading data size for \(selector): \(err)")
+            throw VOAudioError.processTapCreationFailed("Error reading data size for \(selector): \(err)")
         }
 
         var value: T = defaultValue
@@ -111,7 +111,7 @@ struct AUAudioUtils {
         }
 
         guard err == noErr else {
-            throw AUAudioError.processTapCreationFailed("Error reading data for \(selector): \(err)")
+            throw VOAudioError.processTapCreationFailed("Error reading data for \(selector): \(err)")
         }
 
         return value

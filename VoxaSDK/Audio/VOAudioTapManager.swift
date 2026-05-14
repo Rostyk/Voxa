@@ -1,21 +1,21 @@
-import Foundation
-import CoreAudio
-import AVFAudio
-import AudioToolbox
 import AppKit
+import AudioToolbox
+import AVFAudio
+import CoreAudio
+import Foundation
 
-typealias AUAudioProcessesScanCompletion = ([AUAudioProcess], AUAudioError?) -> Void
-typealias AUAudioProcessesTapCallback = (AVAudioPCMBuffer) -> Void
-typealias AUAudioProcessesChangeCallback = ([AUAudioProcess]) -> Void
+typealias VOAudioProcessesScanCompletion = ([VOAudioProcess], VOAudioError?) -> Void
+typealias VOAudioProcessesTapCallback = (AVAudioPCMBuffer) -> Void
+typealias VOAudioProcessesChangeCallback = ([VOAudioProcess]) -> Void
 
-final class AUAudioTapManager {
+final class VOAudioTapManager {
 
-    private var activeTaps: [pid_t: AUProcessTap] = [:]
+    private var activeTaps: [pid_t: VOProcessTap] = [:]
     private let audioQueue = DispatchQueue(label: "com.voxa.audiotap", qos: .userInitiated)
 
     private var scanTimer: Timer?
     private let scanInterval: TimeInterval = 8.0
-    private var changeCallback: AUAudioProcessesChangeCallback?
+    private var changeCallback: VOAudioProcessesChangeCallback?
 
     private let systemProcessNames = [
         "corespeechd", "coreaudiod", "audiomxd", "AUHostingServiceXPC_arrow",
@@ -56,29 +56,29 @@ final class AUAudioTapManager {
 
     init() {}
 
-    func scan(onlyWithMicrophoneInput: Bool = true, completion: @escaping AUAudioProcessesScanCompletion) {
+    func scan(onlyWithMicrophoneInput: Bool = true, completion: @escaping VOAudioProcessesScanCompletion) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
 
             do {
-                let objectIdentifiers = try AUAudioUtils.readProcessList()
+                let objectIdentifiers = try VOAudioUtils.readProcessList()
                 let runningApps = NSWorkspace.shared.runningApplications
                 let myPID = ProcessInfo.processInfo.processIdentifier
 
-                var processes: [AUAudioProcess] = []
+                var processes: [VOAudioProcess] = []
                 var skippedSelf = 0
                 var skippedSystem = 0
                 var skippedNonConferencing = 0
 
                 for objectID in objectIdentifiers {
-                    let pid = try AUAudioUtils.readPID(objectID: objectID)
+                    let pid = try VOAudioUtils.readPID(objectID: objectID)
 
                     if pid == myPID {
                         skippedSelf += 1
                         continue
                     }
 
-                    let process = try AUAudioProcess(objectID: objectID, runningApplications: runningApps)
+                    let process = try VOAudioProcess(objectID: objectID, runningApplications: runningApps)
 
                     if self.isSystemAudioProcess(process) {
                         skippedSystem += 1
@@ -91,14 +91,14 @@ final class AUAudioTapManager {
                     }
 
                     if onlyWithMicrophoneInput {
-                        let isRunningInput = AUAudioUtils.readProcessIsRunningInput(objectID: objectID)
+                        let isRunningInput = VOAudioUtils.readProcessIsRunningInput(objectID: objectID)
                         if !isRunningInput {
                             skippedNonConferencing += 1
                             continue
                         }
                     }
 
-                    _ = AUAudioUtils.readProcessIsRunning(objectID: objectID)
+                    _ = VOAudioUtils.readProcessIsRunning(objectID: objectID)
                     processes.append(process)
                 }
 
@@ -108,13 +108,13 @@ final class AUAudioTapManager {
                     completion(processes, nil)
                 }
 
-            } catch let error as AUAudioError {
-                print("[AUAudioTapManager] Scan error: \(error)")
+            } catch let error as VOAudioError {
+                print("[VOAudioTapManager] Scan error: \(error)")
                 DispatchQueue.main.async {
                     completion([], error)
                 }
             } catch {
-                print("[AUAudioTapManager] Scan error: \(error)")
+                print("[VOAudioTapManager] Scan error: \(error)")
                 DispatchQueue.main.async {
                     completion([], .processTapCreationFailed(error.localizedDescription))
                 }
@@ -125,7 +125,7 @@ final class AUAudioTapManager {
     private static let entireSystemTapKey: pid_t = 0
 
     @discardableResult
-    func tap(_ scope: DetectionScope, _ tapCallback: @escaping AUAudioProcessesTapCallback) -> AUAudioError? {
+    func tap(_ scope: ScanScope, _ tapCallback: @escaping VOAudioProcessesTapCallback) -> VOAudioError? {
         switch scope {
         case .all:
             return tapEntireSystem(tapCallback)
@@ -134,22 +134,22 @@ final class AUAudioTapManager {
         }
     }
 
-    private func tapEntireSystem(_ tapCallback: @escaping AUAudioProcessesTapCallback) -> AUAudioError? {
+    private func tapEntireSystem(_ tapCallback: @escaping VOAudioProcessesTapCallback) -> VOAudioError? {
         if activeTaps[Self.entireSystemTapKey] != nil {
             return .tapAlreadyRunning
         }
 
         do {
-            var objectIDs = try AUAudioUtils.readProcessList()
+            var objectIDs = try VOAudioUtils.readProcessList()
             let myPID = ProcessInfo.processInfo.processIdentifier
             objectIDs = objectIDs.filter { id in
-                (try? AUAudioUtils.readPID(objectID: id)) != myPID
+                (try? VOAudioUtils.readPID(objectID: id)) != myPID
             }
             if objectIDs.isEmpty {
                 return .processTapCreationFailed("No audio processes available for entire-system tap")
             }
 
-            let tap = AUProcessTap(objectIDs: objectIDs, aggregateName: "Tap-Entire")
+            let tap = VOProcessTap(objectIDs: objectIDs, aggregateName: "Tap-Entire")
             tap.activate()
             if let errorMessage = tap.errorMessage {
                 return .processTapCreationFailed(errorMessage)
@@ -159,14 +159,14 @@ final class AUAudioTapManager {
             }
             activeTaps[Self.entireSystemTapKey] = tap
             return nil
-        } catch let error as AUAudioError {
+        } catch let error as VOAudioError {
             return error
         } catch {
             return .processTapCreationFailed(error.localizedDescription)
         }
     }
 
-    private func tapProcesses(_ processes: [AUAudioProcess], _ tapCallback: @escaping AUAudioProcessesTapCallback) -> AUAudioError? {
+    private func tapProcesses(_ processes: [VOAudioProcess], _ tapCallback: @escaping VOAudioProcessesTapCallback) -> VOAudioError? {
         if processes.isEmpty {
             return .processTapCreationFailed("No processes in scope")
         }
@@ -177,7 +177,7 @@ final class AUAudioTapManager {
         }
 
         for process in processes {
-            let tap = AUProcessTap(process: process)
+            let tap = VOProcessTap(process: process)
             tap.activate()
             if let errorMessage = tap.errorMessage {
                 removeTaps(for: processes)
@@ -188,7 +188,7 @@ final class AUAudioTapManager {
                     self?.activeTaps.removeValue(forKey: process.id)
                 }
                 activeTaps[process.id] = tap
-            } catch let error as AUAudioError {
+            } catch let error as VOAudioError {
                 removeTaps(for: processes)
                 return error
             } catch {
@@ -199,13 +199,13 @@ final class AUAudioTapManager {
         return nil
     }
 
-    private func removeTaps(for processes: [AUAudioProcess]) {
+    private func removeTaps(for processes: [VOAudioProcess]) {
         for process in processes {
             removeTap(process)
         }
     }
 
-    func removeTap(_ process: AUAudioProcess) {
+    func removeTap(_ process: VOAudioProcess) {
         guard let tap = activeTaps[process.id] else {
             return
         }
@@ -228,14 +228,14 @@ final class AUAudioTapManager {
         activeTaps.removeAll()
     }
 
-    func startMonitoring(onlyWithMicrophoneInput: Bool = true, onChange: @escaping AUAudioProcessesChangeCallback) {
+    func startMonitoring(onlyWithMicrophoneInput: Bool = true, onChange: @escaping VOAudioProcessesChangeCallback) {
         guard scanTimer == nil else {
-            print("[AUAudioTapManager] Already monitoring")
+            print("[VOAudioTapManager] Already monitoring")
             return
         }
 
         monitoringOnlyWithMicrophoneInput = onlyWithMicrophoneInput
-        print("[AUAudioTapManager] Starting process monitoring (8s polling, onlyWithMicrophoneInput: \(onlyWithMicrophoneInput))")
+        print("[VOAudioTapManager] Starting process monitoring (8s polling, onlyWithMicrophoneInput: \(onlyWithMicrophoneInput))")
 
         changeCallback = onChange
         performScan()
@@ -248,7 +248,7 @@ final class AUAudioTapManager {
             RunLoop.main.add(timer, forMode: .common)
         }
 
-        print("[AUAudioTapManager] Process monitoring started")
+        print("[VOAudioTapManager] Process monitoring started")
     }
 
     func stopMonitoring() {
@@ -256,13 +256,13 @@ final class AUAudioTapManager {
             return
         }
 
-        print("[AUAudioTapManager] Stopping process monitoring")
+        print("[VOAudioTapManager] Stopping process monitoring")
 
         scanTimer?.invalidate()
         scanTimer = nil
         changeCallback = nil
 
-        print("[AUAudioTapManager] Process monitoring stopped")
+        print("[VOAudioTapManager] Process monitoring stopped")
     }
 
     func updateScanFilter(onlyWithMicrophoneInput: Bool) {
@@ -279,13 +279,13 @@ final class AUAudioTapManager {
 
         scan(onlyWithMicrophoneInput: monitoringOnlyWithMicrophoneInput) { processes, error in
             if let error = error {
-                print("[AUAudioTapManager] Scan error: \(error)")
+                print("[VOAudioTapManager] Scan error: \(error)")
             }
             callback(processes)
         }
     }
 
-    private func isWebBrowserOrVideoConferencing(_ process: AUAudioProcess) -> Bool {
+    private func isWebBrowserOrVideoConferencing(_ process: VOAudioProcess) -> Bool {
         let name = process.name.lowercased()
 
         for videoConfName in videoConferencingAppNames {
@@ -319,7 +319,7 @@ final class AUAudioTapManager {
         return false
     }
 
-    private func isSystemAudioProcess(_ process: AUAudioProcess) -> Bool {
+    private func isSystemAudioProcess(_ process: VOAudioProcess) -> Bool {
         let processNameLower = process.name.lowercased()
 
         for systemName in systemProcessNames {

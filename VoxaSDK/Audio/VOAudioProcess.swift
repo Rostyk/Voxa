@@ -3,7 +3,7 @@ import CoreAudio
 import Foundation
 import UniformTypeIdentifiers
 
-public struct AUAudioProcess: Identifiable, Hashable, Sendable {
+public struct VOAudioProcess: Identifiable, Hashable, Sendable {
 
     public enum Kind: String, Sendable {
         case process
@@ -29,7 +29,7 @@ public struct AUAudioProcess: Identifiable, Hashable, Sendable {
     }
 }
 
-extension AUAudioProcess.Kind {
+extension VOAudioProcess.Kind {
     public var defaultIcon: NSImage {
         switch self {
         case .process: NSWorkspace.shared.icon(for: .unixExecutable)
@@ -45,7 +45,7 @@ extension AUAudioProcess.Kind {
     }
 }
 
-extension AUAudioProcess {
+extension VOAudioProcess {
     public var icon: NSImage {
         guard let bundleURL else { return kind.defaultIcon }
         let image = NSWorkspace.shared.icon(forFile: bundleURL.path)
@@ -54,7 +54,7 @@ extension AUAudioProcess {
     }
 }
 
-extension AUAudioProcess {
+extension VOAudioProcess {
 
     init(app: NSRunningApplication, objectID: AudioObjectID) {
         let name = app.localizedName ?? app.bundleURL?.deletingPathExtension().lastPathComponent ?? app.bundleIdentifier?.components(separatedBy: ".").last ?? "Unknown \(app.processIdentifier)"
@@ -63,7 +63,7 @@ extension AUAudioProcess {
             id: app.processIdentifier,
             kind: .app,
             name: name,
-            audioActive: AUAudioUtils.readProcessIsRunning(objectID: objectID),
+            audioActive: VOAudioUtils.readProcessIsRunning(objectID: objectID),
             bundleID: app.bundleIdentifier,
             bundleURL: app.bundleURL,
             objectID: objectID
@@ -71,7 +71,7 @@ extension AUAudioProcess {
     }
 
     init(objectID: AudioObjectID, runningApplications apps: [NSRunningApplication]) throws {
-        let pid: pid_t = try AUAudioUtils.readPID(objectID: objectID)
+        let pid: pid_t = try VOAudioUtils.readPID(objectID: objectID)
 
         if let app = apps.first(where: { $0.processIdentifier == pid }) {
             self.init(app: app, objectID: objectID)
@@ -81,11 +81,11 @@ extension AUAudioProcess {
     }
 
     init(objectID: AudioObjectID, pid: pid_t) throws {
-        let bundleID = AUAudioUtils.readProcessBundleID(objectID: objectID)
+        let bundleID = VOAudioUtils.readProcessBundleID(objectID: objectID)
         let bundleURL: URL?
         let name: String
 
-        if let info = AUAudioUtils.processInfo(for: pid) {
+        if let info = VOAudioUtils.processInfo(for: pid) {
             name = info.name
             bundleURL = URL(fileURLWithPath: info.path).parentBundleURL()
         } else if let id = bundleID?.lastReverseDNSComponent {
@@ -100,7 +100,7 @@ extension AUAudioProcess {
             id: pid,
             kind: bundleURL?.isApp == true ? .app : .process,
             name: name,
-            audioActive: AUAudioUtils.readProcessIsRunning(objectID: objectID),
+            audioActive: VOAudioUtils.readProcessIsRunning(objectID: objectID),
             bundleID: bundleID.flatMap { $0.isEmpty ? nil : $0 },
             bundleURL: bundleURL,
             objectID: objectID

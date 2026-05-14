@@ -1,14 +1,15 @@
 import AVFoundation
 import Foundation
 
-public typealias AUProcessScanCompletion = ([AUAudioProcess], AUAudioError?) -> Void
-public typealias AUProcessTapCallback = (AVAudioPCMBuffer) -> Void
-public typealias AUProcessChangeCallback = ([AUAudioProcess]) -> Void
-public typealias AUAudioBufferObserver = (AVAudioPCMBuffer) -> Void
+public typealias VOProcessScanCompletion = ([VOAudioProcess], VOAudioError?) -> Void
+public typealias VOProcessTapCallback = (AVAudioPCMBuffer) -> Void
+public typealias VOProcessChangeCallback = ([VOAudioProcess]) -> Void
+public typealias VOAudioBufferObserver = (AVAudioPCMBuffer) -> Void
 
-public final class VoxaSystemAudio {
+/// Main entry point for system audio scanning and live tap streaming (`import VoxaSDK`).
+public final class VoxaAudioKit {
 
-    private let tapManager = AUAudioTapManager()
+    private let tapManager = VOAudioTapManager()
     private let audioRecordingPermission = AudioRecordingPermission()
 
     public init() {}
@@ -18,11 +19,11 @@ public final class VoxaSystemAudio {
         removeAllTaps()
     }
 
-    public func scan(onlyWithMicrophoneInput: Bool = true, completion: @escaping AUProcessScanCompletion) {
+    public func scan(onlyWithMicrophoneInput: Bool = true, completion: @escaping VOProcessScanCompletion) {
         tapManager.scan(onlyWithMicrophoneInput: onlyWithMicrophoneInput, completion: completion)
     }
 
-    public func startMonitoring(onlyWithMicrophoneInput: Bool = true, onChange: @escaping AUProcessChangeCallback) {
+    public func startMonitoring(onlyWithMicrophoneInput: Bool = true, onChange: @escaping VOProcessChangeCallback) {
         tapManager.startMonitoring(onlyWithMicrophoneInput: onlyWithMicrophoneInput, onChange: onChange)
     }
 
@@ -34,7 +35,7 @@ public final class VoxaSystemAudio {
         tapManager.stopMonitoring()
     }
 
-    public func removeTap(from process: AUAudioProcess) {
+    public func removeTap(from process: VOAudioProcess) {
         tapManager.removeTap(process)
     }
 
@@ -48,10 +49,10 @@ public final class VoxaSystemAudio {
 
     @discardableResult
     public func startLiveAudioBufferStream(
-        _ scope: DetectionScope = .all,
+        _ scope: ScanScope = .all,
         queue: DispatchQueue,
-        onBuffer: @escaping AUAudioBufferObserver
-    ) -> AUAudioError? {
+        onBuffer: @escaping VOAudioBufferObserver
+    ) -> VOAudioError? {
         requestSystemAudioPermission()
         tapManager.removeAllTaps()
         return tapManager.tap(scope) { buffer in

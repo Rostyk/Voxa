@@ -12,9 +12,6 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Voxa")
-                .font(.title.weight(.bold))
-
             if let permissionMessage {
                 Text(permissionMessage)
                     .foregroundStyle(.secondary)
@@ -25,18 +22,7 @@ struct ContentView: View {
             }
 
             if micGranted && systemAudioGranted {
-                processTitle
-
-                HStack(spacing: 8) {
-                    if callViewModel.isRecording {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 10, height: 10)
-                            .opacity(0.9)
-                    }
-                    Text(callViewModel.isRecording ? "Listening" : "Waiting for call app…")
-                        .font(.subheadline.weight(.semibold))
-                }
+                callStatusCard
 
                 if let recorder = callViewModel.recorder, callViewModel.isRecording {
                     AudioVisualizationView(
@@ -62,12 +48,65 @@ struct ContentView: View {
         }
     }
 
-    private var processTitle: some View {
+    private var callStatusCard: some View {
         let names = callViewModel.activeMicrophoneProcesses.map(\.name)
-        let title = names.isEmpty ? "No mic app detected" : names.joined(separator: ", ")
-        return Text(title)
-            .font(.headline)
-            .lineLimit(2)
+        let hasCallApp = !names.isEmpty
+        let headline = hasCallApp ? names.joined(separator: ", ") : "No mic app detected"
+        let subline = callViewModel.isRecording ? "Listening" : "Waiting for call app…"
+        let headlineIcon = hasCallApp ? "phone.fill" : "mic.slash"
+        let headlineTint = hasCallApp ? Color.accentColor : Color.secondary
+
+        return HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(headlineTint.opacity(0.15))
+                    .frame(width: 44, height: 44)
+                Image(systemName: headlineIcon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(headlineTint)
+            }
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(headline)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if callViewModel.isRecording {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 8, height: 8)
+                            .overlay(
+                                Circle()
+                                    .stroke(.green.opacity(0.45), lineWidth: 1)
+                                    .scaleEffect(1.35)
+                            )
+                            .accessibilityLabel("Active")
+                    } else {
+                        Image(systemName: "hourglass")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Text(subline)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+        }
     }
 
     private func requestPermissionsAndStart() async {
@@ -102,7 +141,7 @@ struct ContentView: View {
     }
 
     private func requestSystemAudioCapturePermission() async -> Bool {
-        let session = VoxaSystemAudio()
+        let session = VoxaAudioKit()
 
         let initial = session.getSystemAudioPermissionStatus()
         print("[ContentView] system audio initial status=\(initial.rawValue)")

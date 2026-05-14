@@ -8,14 +8,14 @@ import VoxaSDK
 final class AudioProcessManager {
 
     private var cancellables = Set<AnyCancellable>()
-    private let sdkDetector: VoxaSystemAudio?
+    private let sdkDetector: VoxaAudioKit?
 
     private(set) var activeAudioProcesses: [AudioProcess] = []
     private(set) var activeMicrophoneProcesses: [AudioProcess] = []
     private(set) var foregroundProcess: AudioProcess?
 
     init() {
-        sdkDetector = VoxaSystemAudio()
+        sdkDetector = VoxaAudioKit()
         setupNotificationObservers()
     }
 
@@ -24,7 +24,7 @@ final class AudioProcessManager {
         startMonitoring()
     }
 
-    private func mapProcess(_ sdkProcess: AUAudioProcess) -> AudioProcess {
+    private func mapProcess(_ sdkProcess: VOAudioProcess) -> AudioProcess {
         AudioProcess(
             id: sdkProcess.id,
             kind: sdkProcess.kind == .app ? .app : .process,
@@ -81,7 +81,7 @@ final class AudioProcessManager {
         }
     }
 
-    private func applySDKAudioProcessUpdate(_ sdkProcesses: [AUAudioProcess]) {
+    private func applySDKAudioProcessUpdate(_ sdkProcesses: [VOAudioProcess]) {
         let mappedAudio = sdkProcesses.map(mapProcess)
         let newForegroundProcess: AudioProcess?
         if let frontApp = NSWorkspace.shared.frontmostApplication {
