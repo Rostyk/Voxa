@@ -136,7 +136,7 @@ final class ConversationViewModel {
         s.history = []
         s.liveTranscript = ""
         state = s
-        captionTranslation.onLiveTranscriptChanged("")
+        captionTranslation.onConversationCleared()
     }
 
     fileprivate func applyPartial(_ text: String) {
@@ -150,13 +150,11 @@ final class ConversationViewModel {
     fileprivate func applyCommit(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let snapCorrected = captionTranslation.liveCorrected.trimmingCharacters(in: .whitespacesAndNewlines)
-        let snapTranslation = captionTranslation.liveTranslation.trimmingCharacters(in: .whitespacesAndNewlines)
         let turn = ConversationTurn(
             speakerLabel: Self.speakerLabel,
             text: trimmed,
-            gptCorrected: snapCorrected.isEmpty ? nil : snapCorrected,
-            gptTranslation: snapTranslation.isEmpty ? nil : snapTranslation
+            gptCorrected: nil,
+            gptTranslation: nil
         )
         var s = state
         s.history.append(turn)
@@ -172,43 +170,47 @@ final class ConversationViewModel {
         )
     }
 
-    /// Late GPT completion for a transcript that already moved into `history` (commit bumped request generation).
+    /// Merges caption / translation into the history row for `turnID` (may not be the last row if several segments finish out of API order).
     private func mergeSupersededCaptionIntoTurnIfNeeded(
         turnID: UUID,
         transcript: String,
         corrected: String,
         translation: String
     ) {
-        guard let lastIdx = state.history.indices.last else { return }
-        let last = state.history[lastIdx]
-        // Only merge into the latest committed bubble — avoids attaching a stale response to an older row when text repeats.
-        guard last.id == turnID else {
-            print("[ConversationViewModel] mergeSupersededCaption skipped — not the most recent committed turn")
+        guard let idx = state.history.firstIndex(where: { $0.id == turnID }) else {
+            print("[ConversationViewModel] mergeCaption skipped — no history row for turnID=\(turnID)")
             return
         }
-        guard TranscriptTurnMatch.likelySameTurn(committed: last.text, inflight: transcript) else {
+        let row = state.history[idx]
+        let rowText = row.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let inflight = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pairOK =
+            rowText == inflight
+            || TranscriptTurnMatch.likelySameTurn(committed: rowText, inflight: inflight)
+            || TranscriptTurnMatch.likelySameTurnLenient(committed: rowText, inflight: inflight)
+        guard pairOK else {
             print(
-                "[ConversationViewModel] mergeSupersededCaption skipped — inflight transcript does not pair with committed line (anti-spoof turn match)"
+                "[ConversationViewModel] mergeCaption skipped — inflight transcript does not pair with row text turnID=\(turnID) rowChars=\(rowText.count) inflightChars=\(inflight.count)"
             )
             return
         }
         let newCorrected = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
         let newTranslation = translation.trimmingCharacters(in: .whitespacesAndNewlines)
-        let mergedCorrected: String? = newCorrected.isEmpty ? last.gptCorrected : newCorrected
-        let mergedTranslation: String? = newTranslation.isEmpty ? last.gptTranslation : newTranslation
-        guard mergedCorrected != last.gptCorrected || mergedTranslation != last.gptTranslation else { return }
+        let mergedCorrected: String? = newCorrected.isEmpty ? row.gptCorrected : newCorrected
+        let mergedTranslation: String? = newTranslation.isEmpty ? row.gptTranslation : newTranslation
+        guard mergedCorrected != row.gptCorrected || mergedTranslation != row.gptTranslation else { return }
         var s = state
-        s.history[lastIdx] = ConversationTurn(
-            id: last.id,
-            speakerLabel: last.speakerLabel,
-            text: last.text,
+        s.history[idx] = ConversationTurn(
+            id: row.id,
+            speakerLabel: row.speakerLabel,
+            text: row.text,
             gptCorrected: mergedCorrected,
             gptTranslation: mergedTranslation,
-            createdAt: last.createdAt
+            createdAt: row.createdAt
         )
         state = s
         print(
-            "[ConversationViewModel] mergeSupersededCaptionIntoTurn turnID=\(turnID) transcriptChars=\(transcript.count) hadTranslation=\(last.gptTranslation != nil)"
+            "[ConversationViewModel] mergeCaptionIntoTurn turnID=\(turnID) rowIndex=\(idx) transcriptChars=\(transcript.count) hadTranslation=\(row.gptTranslation != nil)"
         )
     }
 

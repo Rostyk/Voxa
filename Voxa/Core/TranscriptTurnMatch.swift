@@ -31,6 +31,31 @@ enum TranscriptTurnMatch {
         return false
     }
 
+    /// For late completions after a segment commit: ASR often **revises** early words on long lines, so strict
+    /// `likelySameTurn` can reject a valid pairing. Use after `likelySameTurn` fails when either side is long.
+    static func likelySameTurnLenient(committed: String, inflight: String) -> Bool {
+        if likelySameTurn(committed: committed, inflight: inflight) { return true }
+        let a = Self.normalize(committed)
+        let b = Self.normalize(inflight)
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        guard max(a.count, b.count) >= 36 else { return false }
+
+        let (longer, shorter) = a.count >= b.count ? (a, b) : (b, a)
+        let probeLen = min(56, shorter.count)
+        if probeLen >= 18 {
+            let prefix = String(shorter.prefix(probeLen))
+            if longer.hasPrefix(prefix) { return true }
+        }
+
+        var commonPrefix = 0
+        for (x, y) in zip(a, b) {
+            if x != y { break }
+            commonPrefix += 1
+        }
+        let need = min(28, min(a.count, b.count) / 2)
+        return commonPrefix >= need
+    }
+
     private static func normalize(_ s: String) -> String {
         s.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)

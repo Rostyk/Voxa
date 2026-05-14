@@ -1,9 +1,8 @@
 import Foundation
 import Observation
 
-/// Live translation: **no time debounce** — each eligible partial cancels the previous in-flight request.
-/// Published `liveCorrected` / `liveTranslation` update the UI; keep translation in a **separate**
-/// SwiftUI subtree (see `LiveTranslationPanel`) so STT line layout does not invalidate with every response.
+/// Translation runs **once per committed speech segment** (after the recognizer finalizes a bubble).
+/// No mid‑partial translation — avoids racing GPT against growing STT and wrong / truncated bubbles.
 @MainActor
 @Observable
 final class CaptionTranslationViewModel {
@@ -40,13 +39,14 @@ final class CaptionTranslationViewModel {
     @ObservationIgnored private let googleCaptionService: GoogleTranslateCaptionService?
 
     @ObservationIgnored private var latestRequestID: UInt64 = 0
-    @ObservationIgnored private var lateCaptionAnchor: (turnID: UUID, committedTranscript: String)?
-    @ObservationIgnored private var translateLogTask: Task<Void, Never>?
+    /// Bumped when the conversation is cleared or recording stops so late HTTP replies never touch history.
+    @ObservationIgnored private var translationSessionGeneration: UInt64 = 0
+    @ObservationIgnored private var commitTranslationInFlightCount: Int = 0
 
     var onSupersededTranslation: ((_ turnID: UUID, _ transcript: String, _ corrected: String, _ translation: String) -> Void)?
 
     init() {
-        print("[Caption] CaptionTranslationViewModel init engine=\(_translationEngine.rawValue) (no debounce; UI isolated in transcript view)")
+        print("[Caption] CaptionTranslationViewModel init engine=\(_translationEngine.rawValue) (translate on segment commit only)")
         print(
             "[GPT] chat caption model=\(OpenAIConfiguration.chatCaptionModel()) max_completion_tokens=\(OpenAIConfiguration.chatCaptionMaxCompletionTokens) reasoning_effort=\(OpenAIConfiguration.chatCaptionReasoningEffort() ?? "(none)") (env GPT_MODEL / GPT_REASONING_EFFORT; used when engine=ChatGPT)"
         )
@@ -101,54 +101,68 @@ final class CaptionTranslationViewModel {
         _translationLocaleIdentifier = resolved
     }
 
-    /// Immediate translate attempt on each partial (cancels only the previous in-flight log request — no time debounce).
-    func onLiveTranscriptChanged(_ text: String) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            translateLogTask?.cancel()
-            translateLogTask = nil
-            lateCaptionAnchor = nil
-            latestRequestID &+= 1
-            clearLiveOutputs()
-            print("[Caption] live transcript cleared — translation log idle")
-            return
-        }
-        if trimmed.count < 4 {
-            return
-        }
+    /// Live STT partials do **not** trigger translation (waits for `onSegmentCommitted` after each bubble).
+    /// **Important:** empty partials are common right after a segment commit (silence between phrases). They must **not**
+    /// bump the translation session — that would discard in-flight commit translations before they can merge.
+    func onLiveTranscriptChanged(_ text: String) {}
 
-        translateLogTask?.cancel()
+    /// Call when the user clears the transcript list — invalidates in-flight commit translations for the old session.
+    func onConversationCleared() {
+        translationSessionGeneration &+= 1
         latestRequestID &+= 1
-        let requestID = latestRequestID
-        isTranslating = true
-        translateLogTask = Task { [weak self] in
-            await self?.runTranslationRequest(requestID: requestID, text: trimmed)
-        }
+        clearLiveOutputs()
+        translationLastError = nil
+        print("[Caption] conversation cleared — translation session bumped=\(translationSessionGeneration)")
     }
 
+    /// One translation request per finalized segment; merges into that bubble when the model returns (even if a newer segment already started).
     func onSegmentCommitted(lateCaptionTurnID: UUID, committedTranscript: String) {
         let key = committedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        lateCaptionAnchor = (lateCaptionTurnID, key)
-        print("[Caption] segment committed — cancel in-flight log translate anchor turn=\(lateCaptionTurnID)")
-        translateLogTask?.cancel()
-        translateLogTask = nil
+        guard key.count >= 4 else {
+            print("[Caption] segment committed — skip translate (segment too short chars=\(key.count))")
+            clearLiveOutputs()
+            return
+        }
+
         invalidateInFlightRequests()
-        clearLiveOutputs()
+        let requestID = latestRequestID
+        let sessionGen = translationSessionGeneration
+
+        print(
+            "[Caption] segment committed — translate once turn=\(lateCaptionTurnID) chars=\(key.count) requestID=\(requestID) sessionGen=\(sessionGen)"
+        )
+
+        commitTranslationInFlightCount += 1
+        isTranslating = true
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.commitTranslationInFlightCount -= 1
+                if self.commitTranslationInFlightCount <= 0 {
+                    self.commitTranslationInFlightCount = 0
+                    self.isTranslating = false
+                }
+            }
+            await self.runCommitTranslation(
+                requestID: requestID,
+                turnID: lateCaptionTurnID,
+                text: key,
+                sessionGenerationAtStart: sessionGen
+            )
+        }
     }
 
     func onStoppedListening() {
-        print("[Caption] stopped listening — cancel in-flight log translate")
-        lateCaptionAnchor = nil
-        translateLogTask?.cancel()
-        translateLogTask = nil
-        invalidateInFlightRequests()
+        print("[Caption] stopped listening — bump translation session")
+        translationSessionGeneration &+= 1
+        latestRequestID &+= 1
         clearLiveOutputs()
     }
 
     private func clearLiveOutputs() {
         liveCorrected = ""
         liveTranslation = ""
-        isTranslating = false
     }
 
     private func invalidateInFlightRequests() {
@@ -163,12 +177,16 @@ final class CaptionTranslationViewModel {
         }
     }
 
-    private func runTranslationRequest(requestID: UInt64, text: String) async {
+    private func runCommitTranslation(
+        requestID: UInt64,
+        turnID: UUID,
+        text: String,
+        sessionGenerationAtStart: UInt64
+    ) async {
         guard let service = activeTranslationService() else {
             refreshEngineAvailabilityMessage()
             let msg = translationLastError ?? "Translation backend is not configured for \(translationEngine.displayName)."
-            print("[Caption] translate skipped — \(msg)")
-            isTranslating = false
+            print("[Caption] translate commit skipped — \(msg)")
             return
         }
 
@@ -177,11 +195,11 @@ final class CaptionTranslationViewModel {
             ?? translationLocaleIdentifier
 
         print(
-            "[Caption] translate start id=\(requestID) engine=\(translationEngine.rawValue) target=\"\(targetLabel)\" chars=\(text.count) preview=\"\(Self.logPreview(text))\""
+            "[Caption] translate commit start id=\(requestID) turn=\(turnID) engine=\(translationEngine.rawValue) target=\"\(targetLabel)\" chars=\(text.count) preview=\"\(Self.logPreview(text))\""
         )
 
         if translationEngine == .gpt {
-            print("[GPT] invoking chat/completions id=\(requestID)")
+            print("[GPT] invoking chat/completions commit id=\(requestID)")
         }
 
         let wallStart = CFAbsoluteTimeGetCurrent()
@@ -193,41 +211,38 @@ final class CaptionTranslationViewModel {
             )
             let wall = CFAbsoluteTimeGetCurrent() - wallStart
 
-            if requestID != latestRequestID {
+            let staleRequest = requestID != latestRequestID
+            if staleRequest {
                 print(
-                    "[Caption] translate STALE id=\(requestID) latest=\(latestRequestID) wall=\(String(format: "%.3f", wall))s corrected=\"\(Self.oneLine(payload.corrected))\" translation=\"\(Self.oneLine(payload.translation))\""
+                    "[Caption] translate commit STALE id=\(requestID) latest=\(latestRequestID) wall=\(String(format: "%.3f", wall))s — still merging into turn \(turnID)"
                 )
-                if let anchor = lateCaptionAnchor,
-                    TranscriptTurnMatch.likelySameTurn(committed: anchor.committedTranscript, inflight: text) {
-                    onSupersededTranslation?(anchor.turnID, text, payload.corrected, payload.translation)
-                } else if lateCaptionAnchor != nil {
-                    print("[Caption] translate STALE — superseded merge skipped (committed vs inflight pairing rejected)")
-                }
+            } else {
+                print(
+                    "[Caption] translate commit RESULT id=\(requestID) wall=\(String(format: "%.3f", wall))s correctedChars=\(payload.corrected.count) translationChars=\(payload.translation.count)"
+                )
+            }
+
+            guard sessionGenerationAtStart == translationSessionGeneration else {
+                print("[Caption] translate commit discarded — session generation changed (cleared or stopped)")
                 return
             }
 
-            liveCorrected = payload.corrected
-            liveTranslation = payload.translation
-            translationLastError = nil
-            isTranslating = false
             print(
-                "[Caption] translate RESULT id=\(requestID) engine=\(translationEngine.rawValue) wall=\(String(format: "%.3f", wall))s transcript=\"\(Self.logPreview(text))\" corrected=\"\(Self.oneLine(payload.corrected))\" translation=\"\(Self.oneLine(payload.translation))\""
+                "[Caption] translate commit delivering merge turn=\(turnID) correctedChars=\(payload.corrected.count) translationChars=\(payload.translation.count)"
             )
-        } catch is CancellationError {
-            // A newer partial bumps `latestRequestID` before cancelling this task; do not clear
-            // `isTranslating` here or we would stomp the in-flight successor.
+            onSupersededTranslation?(turnID, text, payload.corrected, payload.translation)
             if requestID == latestRequestID {
-                isTranslating = false
+                translationLastError = nil
             }
-            print("[Caption] translate cancelled id=\(requestID)")
+        } catch is CancellationError {
+            print("[Caption] translate commit cancelled id=\(requestID)")
         } catch {
+            print(
+                "[Caption] translate commit ERROR id=\(requestID) wall=\(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - wallStart))s \(error.localizedDescription)"
+            )
             if requestID == latestRequestID {
                 translationLastError = error.localizedDescription
-                isTranslating = false
             }
-            print(
-                "[Caption] translate ERROR id=\(requestID) wall=\(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - wallStart))s \(error.localizedDescription)"
-            )
         }
     }
 
@@ -241,5 +256,4 @@ final class CaptionTranslationViewModel {
         let idx = oneLine.index(oneLine.startIndex, offsetBy: maxLen)
         return String(oneLine[..<idx]) + "…"
     }
-
 }

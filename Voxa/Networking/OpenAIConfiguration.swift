@@ -11,8 +11,8 @@ enum OpenAIConfiguration: Sendable {
         return raw.isEmpty ? "gpt-4o" : raw
     }
 
-    /// GPT‑5 counts **reasoning** + visible text inside `max_completion_tokens`. Too low (e.g. 512) can spend the entire budget on reasoning, leaving `content` empty and `finish_reason: "length"`.
-    static let chatCaptionMaxCompletionTokens = 4096
+    /// Long outputs (full paragraph translation + corrected) need headroom; reasoning models also consume this budget.
+    static let chatCaptionMaxCompletionTokens = 8192
 
     /// For reasoning chat models (`gpt-5-*`, etc.). Lower effort leaves more budget for the JSON reply. Override: env `GPT_REASONING_EFFORT` (`minimal`, `low`, `medium`, `high`).
     static func chatCaptionReasoningEffort() -> String? {
