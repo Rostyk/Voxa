@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 
 // MARK: - Copied from AuriginMac `AudioUtils` (prepareWAVData path only) for identical chunk normalization.
+// Voxa: WAV length follows resampled PCM (no fixed-duration pad) so `LocalAudioChunkWriter` chunk sizes map to real audio length.
 
 private enum ResampleError: Error {
     case converter
@@ -22,16 +23,9 @@ enum VoxaAuriginChunkWAV {
             sourceFormat: format,
             targetSampleRate: targetSampleRate
         )
-        let expectedSamplesFor5Seconds = targetSampleRate * 5
-        var finalFloatArray = processedAudio.normalizedFloatArray
-        if finalFloatArray.count > expectedSamplesFor5Seconds {
-            finalFloatArray = Array(finalFloatArray.prefix(expectedSamplesFor5Seconds))
-        } else if finalFloatArray.count < expectedSamplesFor5Seconds {
-            let shortfall = expectedSamplesFor5Seconds - finalFloatArray.count
-            if shortfall > 0, shortfall < expectedSamplesFor5Seconds {
-                finalFloatArray.append(contentsOf: [Float](repeating: 0, count: shortfall))
-            }
-        }
+        // Use natural length after resample so chunk wall time matches `LocalAudioChunkWriter.chunkDurationSeconds`
+        // (fixed 5 s padding would add silence when chunks are shorter than 5 s).
+        let finalFloatArray = processedAudio.normalizedFloatArray
         return createWavData(from: finalFloatArray, sampleRate: targetSampleRate)
     }
 

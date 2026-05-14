@@ -1,0 +1,4 @@
+// Base app settings. Override OPEN_AI_KEY locally via VoxaSecrets.local.xcconfig (gitignored).
+OPEN_AI_KEY =
+
+#include? "VoxaSecrets.local.xcconfig"

@@ -4,13 +4,27 @@ import Foundation
 struct ConversationTurn: Identifiable, Hashable, Sendable {
     let id: UUID
     let speakerLabel: String
+    /// Raw committed transcript from speech recognition.
     let text: String
+    /// GPT “corrected” line at commit time (same language as transcript), if any.
+    let gptCorrected: String?
+    /// GPT translation at commit time (or filled in shortly after if the request finished late).
+    let gptTranslation: String?
     let createdAt: Date
 
-    init(id: UUID = UUID(), speakerLabel: String, text: String, createdAt: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        speakerLabel: String,
+        text: String,
+        gptCorrected: String? = nil,
+        gptTranslation: String? = nil,
+        createdAt: Date = Date()
+    ) {
         self.id = id
         self.speakerLabel = speakerLabel
         self.text = text
+        self.gptCorrected = gptCorrected
+        self.gptTranslation = gptTranslation
         self.createdAt = createdAt
     }
 }

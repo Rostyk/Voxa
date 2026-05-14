@@ -1,9 +1,12 @@
 import AVFoundation
 import Foundation
 
-/// Accumulates mono float32 PCM on the tap queue; when 5 s of source bytes are ready, copies them off and
+/// Accumulates mono float32 PCM on the tap queue; when `chunkDurationSeconds` of source bytes are ready, copies them off and
 /// encodes/writes WAV on a dedicated serial background queue so the callback stays light.
 final class LocalAudioChunkWriter {
+
+    /// Shorter chunks → more frequent WAV files (e.g. for inspection) without changing capture tap rate.
+    static let defaultChunkDurationSeconds: TimeInterval = 2.5
 
     static var chunksOutputFolderPath: String {
         chunksOutputDirectoryURL().path
@@ -30,7 +33,7 @@ final class LocalAudioChunkWriter {
 
     let folderPath: String
 
-    init(chunkDurationSeconds: TimeInterval = 5.0) {
+    init(chunkDurationSeconds: TimeInterval = LocalAudioChunkWriter.defaultChunkDurationSeconds) {
         self.chunkDurationSeconds = chunkDurationSeconds
         let outputDirectory = Self.chunksOutputDirectoryURL()
         self.outputDirectory = outputDirectory

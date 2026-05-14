@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import Speech
 
 @MainActor
 @Observable
@@ -11,25 +10,20 @@ final class ConversationViewModel {
 
     private(set) var state: ConversationState
 
+    /// Live-line GPT correction + translation (kept out of conversation state on purpose).
+    let captionTranslation = CaptionTranslationViewModel()
+
     @ObservationIgnored private let speech = VoiceToTextManager()
     @ObservationIgnored private var lastEnergySpeaking: Bool?
 
     /// Locales supported for dictation-style speech on this Mac (same pool as `SFSpeechRecognizer`).
     static func supportedSpeechLocaleIdentifiers() -> [String] {
-        Array(SFSpeechRecognizer.supportedLocales()).map(\.identifier).sorted()
+        SpeechRecognitionLocaleCatalog.supportedIdentifiers()
     }
 
     /// Picks a supported locale identifier closest to `preferred` (exact match, then same language code).
     static func resolvedSpeechLocaleIdentifier(_ preferred: String) -> String {
-        let supported = Set(SFSpeechRecognizer.supportedLocales().map(\.identifier))
-        if supported.contains(preferred) { return preferred }
-        let pref = Locale(identifier: preferred)
-        if let code = pref.language.languageCode?.identifier {
-            let matches = supported.filter { Locale(identifier: $0).language.languageCode?.identifier == code }
-                .sorted()
-            if let first = matches.first { return first }
-        }
-        return supported.sorted().first ?? preferred
+        SpeechRecognitionLocaleCatalog.resolvedIdentifier(preferred)
     }
 
     init() {
@@ -43,6 +37,14 @@ final class ConversationViewModel {
             speechLocaleIdentifier: localeId,
             lastError: nil
         )
+        captionTranslation.onSupersededTranslation = { [weak self] turnID, transcript, corrected, translation in
+            self?.mergeSupersededCaptionIntoTurnIfNeeded(
+                turnID: turnID,
+                transcript: transcript,
+                corrected: corrected,
+                translation: translation
+            )
+        }
     }
 
     /// SwiftUI `Picker` binding; changing value rotates `SFSpeechRecognizer` while the tap stays live.
@@ -119,6 +121,7 @@ final class ConversationViewModel {
         s.isSpeakerSpeaking = false
         s.isSilent = true
         state = s
+        captionTranslation.onStoppedListening()
     }
 
     func clearConversation() {
@@ -127,6 +130,7 @@ final class ConversationViewModel {
         s.history = []
         s.liveTranscript = ""
         state = s
+        captionTranslation.onLiveTranscriptChanged("")
     }
 
     private func applyPartial(_ text: String) {
@@ -134,22 +138,76 @@ final class ConversationViewModel {
         s.liveTranscript = text
         s.isSilent = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !s.isSpeakerSpeaking
         state = s
+        captionTranslation.onLiveTranscriptChanged(text)
     }
 
     private func applyCommit(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let snapCorrected = captionTranslation.liveCorrected.trimmingCharacters(in: .whitespacesAndNewlines)
+        let snapTranslation = captionTranslation.liveTranslation.trimmingCharacters(in: .whitespacesAndNewlines)
+        let turn = ConversationTurn(
+            speakerLabel: Self.speakerLabel,
+            text: trimmed,
+            gptCorrected: snapCorrected.isEmpty ? nil : snapCorrected,
+            gptTranslation: snapTranslation.isEmpty ? nil : snapTranslation
+        )
         var s = state
-        s.history.append(ConversationTurn(speakerLabel: Self.speakerLabel, text: trimmed))
+        s.history.append(turn)
         if s.history.count > Self.maxHistoryTurns {
             s.history.removeFirst(s.history.count - Self.maxHistoryTurns)
         }
         s.liveTranscript = ""
         s.isSilent = !s.isSpeakerSpeaking
         state = s
+        captionTranslation.onSegmentCommitted(lateCaptionTurnID: turn.id, committedTranscript: trimmed)
         print(
             "[ConversationViewModel] applyCommit historyCount=\(s.history.count) chars=\(trimmed.count) \(Self.commitLogPreview(trimmed))"
         )
+    }
+
+    /// Late GPT completion for a transcript that already moved into `history` (commit bumped request generation).
+    private func mergeSupersededCaptionIntoTurnIfNeeded(
+        turnID: UUID,
+        transcript: String,
+        corrected: String,
+        translation: String
+    ) {
+        guard let lastIdx = state.history.indices.last else { return }
+        let last = state.history[lastIdx]
+        // Only merge into the latest committed bubble — avoids attaching a stale response to an older row when text repeats.
+        guard last.id == turnID else {
+            print("[ConversationViewModel] mergeSupersededCaption skipped — not the most recent committed turn")
+            return
+        }
+        guard Self.transcriptsLikelySameTurn(last.text, transcript) else { return }
+        let newCorrected = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newTranslation = translation.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mergedCorrected: String? = newCorrected.isEmpty ? last.gptCorrected : newCorrected
+        let mergedTranslation: String? = newTranslation.isEmpty ? last.gptTranslation : newTranslation
+        guard mergedCorrected != last.gptCorrected || mergedTranslation != last.gptTranslation else { return }
+        var s = state
+        s.history[lastIdx] = ConversationTurn(
+            id: last.id,
+            speakerLabel: last.speakerLabel,
+            text: last.text,
+            gptCorrected: mergedCorrected,
+            gptTranslation: mergedTranslation,
+            createdAt: last.createdAt
+        )
+        state = s
+        print(
+            "[ConversationViewModel] mergeSupersededCaptionIntoTurn turnID=\(turnID) transcriptChars=\(transcript.count) hadTranslation=\(last.gptTranslation != nil)"
+        )
+    }
+
+    private static func transcriptsLikelySameTurn(_ committed: String, _ requestText: String) -> Bool {
+        let a = committed.trimmingCharacters(in: .whitespacesAndNewlines)
+        let b = requestText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        if a == b { return true }
+        if a.contains(b) || b.contains(a) { return true }
+        return false
     }
 
     private static func commitLogPreview(_ text: String, maxLen: Int = 64) -> String {
