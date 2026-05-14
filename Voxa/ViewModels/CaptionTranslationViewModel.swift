@@ -1,7 +1,9 @@
 import Foundation
 import Observation
 
-/// Owns live caption correction + translation for the current partial line. Backend is selected by ``translationEngine``.
+/// Live translation: **no time debounce** — each eligible partial cancels the previous in-flight request.
+/// Published `liveCorrected` / `liveTranslation` update the UI; keep translation in a **separate**
+/// SwiftUI subtree (see `LiveTranslationPanel`) so STT line layout does not invalidate with every response.
 @MainActor
 @Observable
 final class CaptionTranslationViewModel {
@@ -25,7 +27,6 @@ final class CaptionTranslationViewModel {
         }
     }
 
-    /// Latest model outputs for the current live segment.
     var liveCorrected: String = ""
     var liveTranslation: String = ""
 
@@ -38,23 +39,14 @@ final class CaptionTranslationViewModel {
     @ObservationIgnored private let gptCaptionService: GPTCaptionTranslationService?
     @ObservationIgnored private let googleCaptionService: GoogleTranslateCaptionService?
 
-    /// Latest STT text we may send to the translator (updated on every partial).
-    @ObservationIgnored private var latestTranscriptForGPT: String = ""
-    @ObservationIgnored private var lastPartialAt: Date?
-    @ObservationIgnored private var lastGPTFlushCompletedAt: Date?
-    @ObservationIgnored private var debouncerBurstStartedAt: Date?
-    @ObservationIgnored private var debounceLoopTask: Task<Void, Never>?
     @ObservationIgnored private var latestRequestID: UInt64 = 0
     @ObservationIgnored private var lateCaptionAnchor: (turnID: UUID, committedTranscript: String)?
+    @ObservationIgnored private var translateLogTask: Task<Void, Never>?
 
     var onSupersededTranslation: ((_ turnID: UUID, _ transcript: String, _ corrected: String, _ translation: String) -> Void)?
 
-    private static let quietDebounceSeconds: TimeInterval = 1.3
-    private static let maxFlushIntervalSeconds: TimeInterval = 4.0
-    private static let debouncePollMillis: UInt64 = 200
-
     init() {
-        print("[Caption] CaptionTranslationViewModel init engine=\(_translationEngine.rawValue)")
+        print("[Caption] CaptionTranslationViewModel init engine=\(_translationEngine.rawValue) (no debounce; UI isolated in transcript view)")
         print(
             "[GPT] chat caption model=\(OpenAIConfiguration.chatCaptionModel()) max_completion_tokens=\(OpenAIConfiguration.chatCaptionMaxCompletionTokens) reasoning_effort=\(OpenAIConfiguration.chatCaptionReasoningEffort() ?? "(none)") (env GPT_MODEL / GPT_REASONING_EFFORT; used when engine=ChatGPT)"
         )
@@ -109,115 +101,48 @@ final class CaptionTranslationViewModel {
         _translationLocaleIdentifier = resolved
     }
 
-    /// Debounced: follows streaming partials from speech.
+    /// Immediate translate attempt on each partial (cancels only the previous in-flight log request — no time debounce).
     func onLiveTranscriptChanged(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
-            print("[Caption] live transcript cleared — stopping debouncer, clearing outputs")
+            translateLogTask?.cancel()
+            translateLogTask = nil
             lateCaptionAnchor = nil
-            stopDebouncerLoop()
-            lastPartialAt = nil
-            lastGPTFlushCompletedAt = nil
-            latestTranscriptForGPT = ""
-            debouncerBurstStartedAt = nil
+            latestRequestID &+= 1
             clearLiveOutputs()
+            print("[Caption] live transcript cleared — translation log idle")
             return
         }
         if trimmed.count < 4 {
-            print("[Caption] transcript too short (<4 chars) — not scheduling translation")
             return
         }
 
-        latestTranscriptForGPT = trimmed
-        lastPartialAt = Date()
-
-        if debounceLoopTask == nil {
-            debouncerBurstStartedAt = Date()
-            print(
-                "[Caption] debouncer started — flush after \(Self.quietDebounceSeconds)s quiet, or every \(Self.maxFlushIntervalSeconds)s while partials stream; engine=\(translationEngine.rawValue) chars=\(trimmed.count) preview=\"\(Self.logPreview(trimmed))\""
-            )
-            debounceLoopTask = Task { @MainActor [weak self] in
-                await self?.runDebouncerLoop()
-            }
+        translateLogTask?.cancel()
+        latestRequestID &+= 1
+        let requestID = latestRequestID
+        isTranslating = true
+        translateLogTask = Task { [weak self] in
+            await self?.runTranslationRequest(requestID: requestID, text: trimmed)
         }
     }
 
     func onSegmentCommitted(lateCaptionTurnID: UUID, committedTranscript: String) {
         let key = committedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         lateCaptionAnchor = (lateCaptionTurnID, key)
-        print("[Caption] segment committed — invalidate in-flight, clear live outputs anchor turn=\(lateCaptionTurnID)")
-        stopDebouncerLoop()
-        lastPartialAt = nil
-        lastGPTFlushCompletedAt = nil
-        latestTranscriptForGPT = ""
-        debouncerBurstStartedAt = nil
+        print("[Caption] segment committed — cancel in-flight log translate anchor turn=\(lateCaptionTurnID)")
+        translateLogTask?.cancel()
+        translateLogTask = nil
         invalidateInFlightRequests()
         clearLiveOutputs()
     }
 
     func onStoppedListening() {
-        print("[Caption] stopped listening — invalidate in-flight, clear live outputs")
+        print("[Caption] stopped listening — cancel in-flight log translate")
         lateCaptionAnchor = nil
-        stopDebouncerLoop()
-        lastPartialAt = nil
-        lastGPTFlushCompletedAt = nil
-        latestTranscriptForGPT = ""
-        debouncerBurstStartedAt = nil
+        translateLogTask?.cancel()
+        translateLogTask = nil
         invalidateInFlightRequests()
         clearLiveOutputs()
-    }
-
-    private func stopDebouncerLoop() {
-        debounceLoopTask?.cancel()
-        debounceLoopTask = nil
-    }
-
-    private func runDebouncerLoop() async {
-        defer {
-            debounceLoopTask = nil
-            print("[Caption] debouncer loop ended")
-        }
-        while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: Self.debouncePollMillis * 1_000_000)
-            if Task.isCancelled { break }
-            guard let last = lastPartialAt else { return }
-
-            let quietAge = Date().timeIntervalSince(last)
-            let quietOK = quietAge >= Self.quietDebounceSeconds
-
-            var maxIntervalOK = false
-            if let flushedAt = lastGPTFlushCompletedAt {
-                maxIntervalOK = Date().timeIntervalSince(flushedAt) >= Self.maxFlushIntervalSeconds
-            }
-
-            let burstAge = debouncerBurstStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-            let firstBurstMaxOK =
-                lastGPTFlushCompletedAt == nil && burstAge >= Self.maxFlushIntervalSeconds
-
-            if quietOK {
-                print(
-                    "[Caption] debouncer: \(Int(quietAge * 1000))ms quiet — flushing translation (engine=\(translationEngine.rawValue))"
-                )
-            } else if lastGPTFlushCompletedAt != nil, maxIntervalOK {
-                print(
-                    "[Caption] debouncer: max interval \(Int(Self.maxFlushIntervalSeconds))s since last flush while partials stream — flushing"
-                )
-            } else if firstBurstMaxOK {
-                print(
-                    "[Caption] debouncer: max interval \(Int(Self.maxFlushIntervalSeconds))s since debouncer start (no flush yet) — flushing"
-                )
-            } else {
-                continue
-            }
-
-            let text = latestTranscriptForGPT
-            guard text.count >= 4 else { return }
-
-            await runRequest(for: text)
-            lastGPTFlushCompletedAt = Date()
-            lastPartialAt = nil
-            return
-        }
     }
 
     private func clearLiveOutputs() {
@@ -238,42 +163,39 @@ final class CaptionTranslationViewModel {
         }
     }
 
-    private func runRequest(for text: String) async {
+    private func runTranslationRequest(requestID: UInt64, text: String) async {
         guard let service = activeTranslationService() else {
             refreshEngineAvailabilityMessage()
             let msg = translationLastError ?? "Translation backend is not configured for \(translationEngine.displayName)."
-            print("[Caption] runRequest aborted — \(msg)")
+            print("[Caption] translate skipped — \(msg)")
             isTranslating = false
             return
         }
-
-        latestRequestID &+= 1
-        let requestID = latestRequestID
-        isTranslating = true
-        translationLastError = nil
 
         let targetLabel =
             Locale.current.localizedString(forIdentifier: translationLocaleIdentifier)
             ?? translationLocaleIdentifier
 
         print(
-            "[Caption] runRequest start id=\(requestID) engine=\(translationEngine.rawValue) target=\"\(targetLabel)\" contextChars=\(callContextNotes.count) transcriptChars=\(text.count) preview=\"\(Self.logPreview(text))\""
+            "[Caption] translate start id=\(requestID) engine=\(translationEngine.rawValue) target=\"\(targetLabel)\" chars=\(text.count) preview=\"\(Self.logPreview(text))\""
         )
 
         if translationEngine == .gpt {
             print("[GPT] invoking chat/completions id=\(requestID)")
         }
 
-        let runWallStart = CFAbsoluteTimeGetCurrent()
+        let wallStart = CFAbsoluteTimeGetCurrent()
         do {
             let payload = try await service.translateLine(
                 transcript: text,
                 targetLocaleIdentifier: translationLocaleIdentifier,
                 callContextNotes: callContextNotes
             )
-            guard requestID == latestRequestID else {
+            let wall = CFAbsoluteTimeGetCurrent() - wallStart
+
+            if requestID != latestRequestID {
                 print(
-                    "[Caption] runRequest id=\(requestID) dropped stale (latest=\(latestRequestID)) — parent may merge into committed bubble"
+                    "[Caption] translate STALE id=\(requestID) latest=\(latestRequestID) wall=\(String(format: "%.3f", wall))s corrected=\"\(Self.oneLine(payload.corrected))\" translation=\"\(Self.oneLine(payload.translation))\""
                 )
                 if let anchor = lateCaptionAnchor,
                     Self.transcriptsLikelySameTurn(anchor.committedTranscript, text) {
@@ -281,26 +203,34 @@ final class CaptionTranslationViewModel {
                 }
                 return
             }
+
             liveCorrected = payload.corrected
             liveTranslation = payload.translation
             translationLastError = nil
             isTranslating = false
             print(
-                "[Caption] runRequest success id=\(requestID) correctedChars=\(payload.corrected.count) translationChars=\(payload.translation.count) wallTotal=\(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - runWallStart))s"
+                "[Caption] translate RESULT id=\(requestID) engine=\(translationEngine.rawValue) wall=\(String(format: "%.3f", wall))s transcript=\"\(Self.logPreview(text))\" corrected=\"\(Self.oneLine(payload.corrected))\" translation=\"\(Self.oneLine(payload.translation))\""
             )
-        } catch {
-            guard requestID == latestRequestID else {
-                print(
-                    "[Caption] runRequest id=\(requestID) error ignored (stale) latest=\(latestRequestID) error=\(error.localizedDescription)"
-                )
-                return
+        } catch is CancellationError {
+            // A newer partial bumps `latestRequestID` before cancelling this task; do not clear
+            // `isTranslating` here or we would stomp the in-flight successor.
+            if requestID == latestRequestID {
+                isTranslating = false
             }
-            translationLastError = error.localizedDescription
-            isTranslating = false
+            print("[Caption] translate cancelled id=\(requestID)")
+        } catch {
+            if requestID == latestRequestID {
+                translationLastError = error.localizedDescription
+                isTranslating = false
+            }
             print(
-                "[Caption] runRequest failed id=\(requestID) wallTotal=\(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - runWallStart))s error=\(error.localizedDescription)"
+                "[Caption] translate ERROR id=\(requestID) wall=\(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - wallStart))s \(error.localizedDescription)"
             )
         }
+    }
+
+    private static func oneLine(_ text: String) -> String {
+        text.replacingOccurrences(of: "\n", with: " ")
     }
 
     private static func logPreview(_ text: String, maxLen: Int = 72) -> String {

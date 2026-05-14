@@ -2,26 +2,39 @@ import AppKit
 import Observation
 import SwiftUI
 
+/// Transcript UI: **Observation-split** so `CaptionTranslationViewModel` mutations do not invalidate the
+/// same SwiftUI subtree as live STT (`ConversationViewModel.state`). Settings still bind to caption pickers.
 struct ConversationTranscriptView: View {
-    @Bindable var model: ConversationViewModel
+    let model: ConversationViewModel
     @State private var showCallContextSheet = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            CaptionSettingsSection(model: model, showCallContextSheet: $showCallContextSheet)
+            TranscriptScrollCard(model: model)
+                .layoutPriority(1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - Settings (isolated @Bindable caption)
+
+private struct CaptionSettingsSection: View {
+    @Bindable var model: ConversationViewModel
+    @Binding var showCallContextSheet: Bool
 
     private var state: ConversationState { model.state }
 
     var body: some View {
         @Bindable var caption = model.captionTranslation
 
-        VStack(alignment: .leading, spacing: 14) {
-            captionSettingsCard(
-                speechLocale: $model.speechLocaleIdentifier,
-                translationEngine: $caption.translationEngine,
-                translationLocale: $caption.translationLocaleIdentifier,
-                translationLastError: caption.translationLastError
-            )
-            transcriptCard(caption: caption)
-                .layoutPriority(1)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        captionSettingsCard(
+            speechLocale: $model.speechLocaleIdentifier,
+            translationEngine: $caption.translationEngine,
+            translationLocale: $caption.translationLocaleIdentifier,
+            translationLastError: caption.translationLastError
+        )
         .sheet(isPresented: $showCallContextSheet) {
             callContextEditorSheet(isPresented: $showCallContextSheet, notes: $caption.callContextNotes)
         }
@@ -128,8 +141,43 @@ struct ConversationTranscriptView: View {
         .help("Optional notes about this call — used in the ChatGPT translation prompt only (Google Translate ignores this).")
     }
 
-    @ViewBuilder
-    private func transcriptCard(caption: CaptionTranslationViewModel) -> some View {
+    private func menuTitle(for identifier: String) -> String {
+        Locale.current.localizedString(forIdentifier: identifier) ?? identifier
+    }
+
+    private func callContextEditorSheet(isPresented: Binding<Bool>, notes: Binding<String>) -> some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("This text is sent to GPT as call context (topic, names, product jargon). It is not shown in the transcript.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                TextEditor(text: notes)
+                    .font(.body)
+                    .frame(minHeight: 160)
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.12)))
+            }
+            .padding(16)
+            .frame(minWidth: 400, minHeight: 260)
+            .navigationTitle("Call context")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") { isPresented.wrappedValue = false }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Transcript only observes conversation state
+
+private struct TranscriptScrollCard: View {
+    let model: ConversationViewModel
+
+    private var state: ConversationState { model.state }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 10) {
                 Text("Live transcript")
@@ -147,10 +195,10 @@ struct ConversationTranscriptView: View {
                                 .id(turn.id)
                         }
                         if !state.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            liveMessageBubble(
-                                label: ConversationViewModel.speakerLabel,
+                            LiveSttAndTranslationColumn(
+                                speakerLabel: ConversationViewModel.speakerLabel,
                                 rawTranscript: state.liveTranscript,
-                                caption: caption
+                                caption: model.captionTranslation
                             )
                             .id("live")
                         }
@@ -169,26 +217,12 @@ struct ConversationTranscriptView: View {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                 }
-                .onChange(of: caption.liveTranslation) { _, _ in
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-                .onChange(of: caption.liveCorrected) { _, _ in
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
             }
             .frame(minHeight: 120, maxHeight: .infinity)
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .transcriptPanelChrome()
-    }
-
-    private func menuTitle(for identifier: String) -> String {
-        Locale.current.localizedString(forIdentifier: identifier) ?? identifier
     }
 
     private var statusChip: some View {
@@ -239,40 +273,32 @@ struct ConversationTranscriptView: View {
                 .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
         }
     }
+}
 
-    private func liveMessageBubble(label: String, rawTranscript: String, caption: CaptionTranslationViewModel) -> some View {
-        let sourceLine =
-            caption.liveCorrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? rawTranscript
-            : caption.liveCorrected
+/// STT text comes from conversation state; translation UI is a **nested** subtree that subscribes only to `caption`.
+private struct LiveSttAndTranslationColumn: View {
+    let speakerLabel: String
+    let rawTranscript: String
+    let caption: CaptionTranslationViewModel
 
-        return VStack(alignment: .leading, spacing: 6) {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            liveRawBubble(label: speakerLabel, rawTranscript: rawTranscript)
+            LiveTranslationPanel(caption: caption)
+        }
+    }
+
+    private func liveRawBubble(label: String, rawTranscript: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Color.accentColor)
 
-            Text(sourceLine)
+            Text(rawTranscript)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-
-            if caption.isTranslating && caption.liveTranslation.isEmpty {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Translating…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if !caption.liveTranslation.isEmpty {
-                Text(caption.liveTranslation)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
         }
         .padding(12)
         .background {
@@ -284,29 +310,57 @@ struct ConversationTranscriptView: View {
                 .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 1)
         }
     }
+}
 
-    private func callContextEditorSheet(isPresented: Binding<Bool>, notes: Binding<String>) -> some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("This text is sent to GPT as call context (topic, names, product jargon). It is not shown in the transcript.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                TextEditor(text: notes)
-                    .font(.body)
-                    .frame(minHeight: 160)
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.12)))
-            }
-            .padding(16)
-            .frame(minWidth: 400, minHeight: 260)
-            .navigationTitle("Call context")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Apply") { isPresented.wrappedValue = false }
+/// Only this view reads `caption` published fields — translation churn does not rebuild the STT bubble above.
+private struct LiveTranslationPanel: View {
+    let caption: CaptionTranslationViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Translation")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if caption.isTranslating && caption.liveTranslation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Translating…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
             }
+
+            let corrected = caption.liveCorrected.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !corrected.isEmpty {
+                Text(corrected)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            let t = caption.liveTranslation.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty {
+                Text(t)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Live translation")
     }
 }
 

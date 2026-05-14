@@ -126,8 +126,7 @@ final class ConversationViewModel {
         s.isSpeakerSpeaking = false
         s.isSilent = true
         state = s
-        // TEMP: translation pipeline off — uncomment to re-enable.
-        // captionTranslation.onStoppedListening()
+        captionTranslation.onStoppedListening()
     }
 
     func clearConversation() {
@@ -137,8 +136,7 @@ final class ConversationViewModel {
         s.history = []
         s.liveTranscript = ""
         state = s
-        // TEMP: translation pipeline off — uncomment to re-enable.
-        // captionTranslation.onLiveTranscriptChanged("")
+        captionTranslation.onLiveTranscriptChanged("")
     }
 
     fileprivate func applyPartial(_ text: String) {
@@ -146,8 +144,7 @@ final class ConversationViewModel {
         s.liveTranscript = text
         s.isSilent = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !s.isSpeakerSpeaking
         state = s
-        // TEMP: translation pipeline off — uncomment to re-enable (this call starts the debouncer / network).
-        // captionTranslation.onLiveTranscriptChanged(text)
+        captionTranslation.onLiveTranscriptChanged(text)
     }
 
     fileprivate func applyCommit(_ text: String) {
@@ -169,8 +166,7 @@ final class ConversationViewModel {
         s.liveTranscript = ""
         s.isSilent = !s.isSpeakerSpeaking
         state = s
-        // TEMP: translation pipeline off — uncomment to re-enable.
-        // captionTranslation.onSegmentCommitted(lateCaptionTurnID: turn.id, committedTranscript: trimmed)
+        captionTranslation.onSegmentCommitted(lateCaptionTurnID: turn.id, committedTranscript: trimmed)
         print(
             "[ConversationViewModel] applyCommit historyCount=\(s.history.count) chars=\(trimmed.count) \(Self.commitLogPreview(trimmed))"
         )
