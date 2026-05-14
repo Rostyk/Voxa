@@ -1,11 +1,11 @@
 import AVFoundation
 import AppKit
-import Speech
 import SwiftUI
 import VoxaSDK
 
 struct ContentView: View {
-    @State private var callViewModel = CallViewModel.shared
+    /// Use the shared instance without `@State` so `@Observable` invalidations reliably refresh this view and `onChange` handlers.
+    private var callViewModel: CallViewModel { CallViewModel.shared }
     @State private var conversationViewModel = ConversationViewModel()
     @State private var micGranted = false
     @State private var systemAudioGranted = false
@@ -52,23 +52,17 @@ struct ContentView: View {
         }
         .onChange(of: callViewModel.isRecording) { _, recording in
             guard micGranted, systemAudioGranted else { return }
-            guard let recorder = callViewModel.recorder else { return }
             if recording {
-                conversationViewModel.bindToRecorder(recorder)
-            } else {
+                tryBindConversationIfReady()
+            } else if let recorder = callViewModel.recorder {
                 conversationViewModel.unbind(from: recorder)
             }
         }
-        .onChange(of: conversationViewModel.state.speechAuthorized) { _, granted in
-            guard granted, micGranted, systemAudioGranted else { return }
-            guard callViewModel.isRecording, let recorder = callViewModel.recorder else { return }
-            conversationViewModel.bindToRecorder(recorder)
-        }
+        .onChange(of: micGranted) { _, _ in tryBindConversationIfReady() }
+        .onChange(of: systemAudioGranted) { _, _ in tryBindConversationIfReady() }
+        .onChange(of: conversationViewModel.state.transcriptionAuthorized) { _, _ in tryBindConversationIfReady() }
         .onAppear {
-            guard micGranted, systemAudioGranted else { return }
-            if callViewModel.isRecording, let recorder = callViewModel.recorder {
-                conversationViewModel.bindToRecorder(recorder)
-            }
+            tryBindConversationIfReady()
         }
     }
 
@@ -164,21 +158,21 @@ struct ContentView: View {
 
         guard systemOK else { return }
 
-        // Speech must be set before activate(): otherwise recording can start, onChange binds
-        // while speechAuthorized is still false, bind aborts, and nothing re-triggers bind.
-        let speechOK = await requestSpeechAuthorization()
+        // FluidAudio (no Apple Speech): enable transcription gate once audio permissions are OK.
         await MainActor.run {
-            conversationViewModel.setSpeechAuthorized(speechOK)
+            conversationViewModel.setTranscriptionAuthorized(true)
             callViewModel.activate()
+            tryBindConversationIfReady()
         }
     }
 
-    private func requestSpeechAuthorization() async -> Bool {
-        await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status == .authorized)
-            }
-        }
+    /// Binds FluidAudio when **all** gates are satisfied. Recording often starts *after* permissions via `CallViewModel` mic notifications, so we retry from several `onChange` sources (a single `onChange(isRecording)` is easy to miss with observation timing).
+    private func tryBindConversationIfReady() {
+        guard micGranted, systemAudioGranted else { return }
+        guard conversationViewModel.state.transcriptionAuthorized else { return }
+        guard callViewModel.isRecording, let recorder = callViewModel.recorder else { return }
+        print("[ContentView] tryBindConversationIfReady → bindToRecorder")
+        conversationViewModel.bindToRecorder(recorder)
     }
 
     private func requestSystemAudioCapturePermission() async -> Bool {

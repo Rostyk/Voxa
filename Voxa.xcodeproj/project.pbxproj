@@ -25,6 +25,7 @@
 /* Begin PBXBuildFile section */
 		630CC3702FB4A50F0056D9FA /* VoxaSDK.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 630CC36A2FB4A50F0056D9FA /* VoxaSDK.framework */; };
 		630CC3712FB4A50F0056D9FA /* VoxaSDK.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 630CC36A2FB4A50F0056D9FA /* VoxaSDK.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		63FE4E572FB5E42C00414778 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 630CC4A12FB4A4E50056D9FA /* FluidAudio */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -74,6 +75,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				63FE4E572FB5E42C00414778 /* FluidAudio in Frameworks */,
 				630CC3702FB4A50F0056D9FA /* VoxaSDK.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -138,6 +140,7 @@
 			);
 			name = Voxa;
 			packageProductDependencies = (
+				630CC4A12FB4A4E50056D9FA /* FluidAudio */,
 			);
 			productName = Voxa;
 			productReference = 630CC3472FB4A4E50056D9FA /* Voxa.app */;
@@ -196,6 +199,9 @@
 			);
 			mainGroup = 630CC33E2FB4A4E50056D9FA;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				630CC4A02FB4A4E50056D9FA /* XCRemoteSwiftPackageReference "FluidAudio" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 630CC3482FB4A4E50056D9FA /* Products */;
 			projectDirPath = "";
@@ -410,7 +416,6 @@
 				INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Voxa captures system audio output to show levels while a supported call app is using the microphone.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Voxa uses the microphone permission together with system audio capture to detect when call apps are active and visualize audio.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Voxa transcribes call audio on device so you can read the conversation as it happens.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -446,7 +451,6 @@
 				INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Voxa captures system audio output to show levels while a supported call app is using the microphone.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Voxa uses the microphone permission together with system audio capture to detect when call apps are active and visualize audio.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Voxa transcribes call audio on device so you can read the conversation as it happens.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -600,6 +604,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		630CC4A02FB4A4E50056D9FA /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.14.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		630CC4A12FB4A4E50056D9FA /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 630CC4A02FB4A4E50056D9FA /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 630CC33F2FB4A4E50056D9FA /* Project object */;
 }

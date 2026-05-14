@@ -30,7 +30,7 @@ struct ConversationTranscriptView: View {
                         }
                         if !state.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             messageBubble(
-                                label: ConversationViewModel.speakerLabel,
+                                label: ConversationViewModel.liveSpeakerLabel,
                                 text: state.liveTranscript,
                                 isLive: true
                             )

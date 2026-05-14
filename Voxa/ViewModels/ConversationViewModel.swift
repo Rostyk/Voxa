@@ -5,20 +5,25 @@ import Observation
 @Observable
 final class ConversationViewModel {
 
-    static let speakerLabel = "Speaker"
+    static let liveSpeakerLabel = "Live"
     private static let maxHistoryTurns = 150
 
     private(set) var state = ConversationState.empty
 
-    @ObservationIgnored private let speech = VoiceToTextManager()
+    @ObservationIgnored private let fluid = FluidAudioTranscriptionService()
     @ObservationIgnored private var lastEnergySpeaking: Bool?
+    @ObservationIgnored private var fluidBindTask: Task<Void, Never>?
+    @ObservationIgnored private var lastBoundRecorder: ObjectIdentifier?
+    @ObservationIgnored private var lastBindAt: CFAbsoluteTime = 0
 
-    func setSpeechAuthorized(_ granted: Bool) {
-        print("[ConversationViewModel] setSpeechAuthorized granted=\(granted)")
+    /// Gate for starting FluidAudio (Parakeet + LS-EEND). Set after mic + system audio are ready.
+    func setTranscriptionAuthorized(_ granted: Bool) {
+        print("[ConversationViewModel] setTranscriptionAuthorized granted=\(granted)")
         var s = state
-        s.speechAuthorized = granted
+        s.transcriptionAuthorized = granted
         if !granted {
-            s.lastError = "Speech recognition was denied. Enable it in System Settings → Privacy & Security → Speech Recognition."
+            s.lastError =
+                "Local transcription is unavailable. FluidAudio models could not be prepared on this device."
         } else {
             s.lastError = nil
         }
@@ -26,43 +31,67 @@ final class ConversationViewModel {
     }
 
     func bindToRecorder(_ recorder: CallAudioRecorder) {
-        print("[ConversationViewModel] bindToRecorder enter speechAuthorized=\(state.speechAuthorized)")
-        recorder.onLiveBuffer = nil
-        speech.stop()
+        print("[ConversationViewModel] bindToRecorder enter transcriptionAuthorized=\(state.transcriptionAuthorized)")
+        let rid = ObjectIdentifier(recorder)
+        let now = CFAbsoluteTimeGetCurrent()
+        if lastBoundRecorder == rid, now - lastBindAt < 0.75 {
+            print("[ConversationViewModel] bindToRecorder skipped (debounce duplicate bind)")
+            return
+        }
+        lastBoundRecorder = rid
+        lastBindAt = now
 
-        guard state.speechAuthorized else {
+        recorder.onLiveBuffer = nil
+        fluidBindTask?.cancel()
+
+        guard state.transcriptionAuthorized else {
             var s = state
-            s.lastError = "Speech recognition is off — allow it to see live captions."
+            s.lastError = "Allow transcription to see live captions (FluidAudio runs on device)."
             state = s
-            print("[ConversationViewModel] bindToRecorder aborted — speech not authorized")
+            print("[ConversationViewModel] bindToRecorder aborted — transcription not authorized")
             return
         }
         var s = state
         s.lastError = nil
         state = s
 
-        speech.start(
-            onPartial: { [weak self] text in
-                Task { @MainActor in self?.applyPartial(text) }
-            },
-            onCommit: { [weak self] text in
-                Task { @MainActor in self?.applyCommit(text) }
-            },
-            onEnergy: { [weak self] speaking in
-                Task { @MainActor in self?.applyEnergy(speaking) }
+        fluidBindTask = Task { @MainActor in
+            await self.fluid.stop()
+            do {
+                try await self.fluid.start(
+                    onPartial: { [weak self] text in
+                        Task { @MainActor in self?.applyPartial(text) }
+                    },
+                    onCommit: { [weak self] text, speakerLabel in
+                        Task { @MainActor in self?.applyCommit(text, speakerLabel: speakerLabel) }
+                    },
+                    onEnergy: { [weak self] speaking in
+                        Task { @MainActor in self?.applyEnergy(speaking) }
+                    }
+                )
+                recorder.onLiveBuffer = { [weak self] buffer in
+                    Task { await self?.fluid.append(buffer) }
+                }
+                self.lastEnergySpeaking = nil
+                print("[ConversationViewModel] bindToRecorder FluidAudio live tap wired")
+            } catch is CancellationError {
+                print("[ConversationViewModel] bindToRecorder FluidAudio start cancelled (rebind)")
+            } catch {
+                var st = self.state
+                st.lastError =
+                    "FluidAudio failed to start: \(error.localizedDescription). First launch downloads models from the FluidAudio registry."
+                self.state = st
+                print("[ConversationViewModel] bindToRecorder FluidAudio start failed: \(error)")
             }
-        )
-        recorder.onLiveBuffer = { [weak self] buffer in
-            self?.speech.append(buffer)
         }
-        lastEnergySpeaking = nil
-        print("[ConversationViewModel] bindToRecorder live tap wired (onLiveBuffer -> speech.append)")
     }
 
     func unbind(from recorder: CallAudioRecorder) {
         print("[ConversationViewModel] unbind")
+        lastBoundRecorder = nil
         recorder.onLiveBuffer = nil
-        speech.stop()
+        fluidBindTask?.cancel()
+        fluidBindTask = Task { @MainActor in await self.fluid.stop() }
         var s = state
         s.liveTranscript = ""
         s.isSpeakerSpeaking = false
@@ -85,11 +114,11 @@ final class ConversationViewModel {
         state = s
     }
 
-    private func applyCommit(_ text: String) {
+    private func applyCommit(_ text: String, speakerLabel: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         var s = state
-        s.history.append(ConversationTurn(speakerLabel: Self.speakerLabel, text: trimmed))
+        s.history.append(ConversationTurn(speakerLabel: speakerLabel, text: trimmed))
         if s.history.count > Self.maxHistoryTurns {
             s.history.removeFirst(s.history.count - Self.maxHistoryTurns)
         }
@@ -97,7 +126,7 @@ final class ConversationViewModel {
         s.isSilent = !s.isSpeakerSpeaking
         state = s
         print(
-            "[ConversationViewModel] applyCommit historyCount=\(s.history.count) chars=\(trimmed.count) \(Self.commitLogPreview(trimmed))"
+            "[ConversationViewModel] applyCommit speaker=\(speakerLabel) historyCount=\(s.history.count) chars=\(trimmed.count) \(Self.commitLogPreview(trimmed))"
         )
     }
 

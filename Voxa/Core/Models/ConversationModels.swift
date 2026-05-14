@@ -18,13 +18,14 @@ struct ConversationTurn: Identifiable, Hashable, Sendable {
 /// Snapshot for UI + debugging; replace as a whole when updating.
 struct ConversationState: Sendable {
     var history: [ConversationTurn]
-    /// Current streaming line from Speech partial results (same “bubble” until pause).
+    /// Current streaming line from FluidAudio sliding-window ASR (same bubble until silence commit).
     var liveTranscript: String
     /// Recent energy on converted tap audio (rough proxy for “someone talking”).
     var isSpeakerSpeaking: Bool
     /// No partial updates and low energy for a short window (derived in view model).
     var isSilent: Bool
-    var speechAuthorized: Bool
+    /// Mic + system audio ready; FluidAudio may start on bind.
+    var transcriptionAuthorized: Bool
     var lastError: String?
 
     static let empty = ConversationState(
@@ -32,7 +33,7 @@ struct ConversationState: Sendable {
         liveTranscript: "",
         isSpeakerSpeaking: false,
         isSilent: true,
-        speechAuthorized: false,
+        transcriptionAuthorized: false,
         lastError: nil
     )
 }
