@@ -1,16 +1,34 @@
 import AppKit
+import Observation
 import SwiftUI
 
 struct ConversationTranscriptView: View {
-    var state: ConversationState
+    @Bindable var model: ConversationViewModel
+
+    private var state: ConversationState { model.state }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            HStack(alignment: .center, spacing: 10) {
                 Text("Live transcript")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Spacer()
+                Spacer(minLength: 8)
+                HStack(spacing: 6) {
+                    Text("Language")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: $model.speechLocaleIdentifier) {
+                        ForEach(ConversationViewModel.supportedSpeechLocaleIdentifiers(), id: \.self) { id in
+                            Text(menuTitle(for: id)).tag(id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220, alignment: .trailing)
+                    .labelsHidden()
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Speech recognition language")
                 statusChip
             }
 
@@ -65,6 +83,10 @@ struct ConversationTranscriptView: View {
         }
     }
 
+    private func menuTitle(for identifier: String) -> String {
+        Locale.current.localizedString(forIdentifier: identifier) ?? identifier
+    }
+
     private var statusChip: some View {
         HStack(spacing: 6) {
             Circle()
@@ -79,33 +101,28 @@ struct ConversationTranscriptView: View {
         .background(Capsule().fill(Color.primary.opacity(0.05)))
     }
 
-    @ViewBuilder
     private func messageBubble(label: String, text: String, isLive: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(isLive ? Color.accentColor : Color.secondary)
             Text(text)
                 .font(.body)
                 .foregroundStyle(.primary)
-                .multilineTextAlignment(.leading)
-                .contentTransition(.interpolate)
-                .animation(.snappy(duration: 0.16), value: text)
+                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.12))
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    if isLive {
-                        Text("typing…")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .padding(6)
-                    }
-                }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isLive ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.04))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(
+                    isLive ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.06),
+                    lineWidth: 1
+                )
+        }
     }
 }

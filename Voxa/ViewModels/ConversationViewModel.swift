@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Speech
 
 @MainActor
 @Observable
@@ -8,10 +9,56 @@ final class ConversationViewModel {
     static let speakerLabel = "Speaker"
     private static let maxHistoryTurns = 150
 
-    private(set) var state = ConversationState.empty
+    private(set) var state: ConversationState
 
     @ObservationIgnored private let speech = VoiceToTextManager()
     @ObservationIgnored private var lastEnergySpeaking: Bool?
+
+    /// Locales supported for dictation-style speech on this Mac (same pool as `SFSpeechRecognizer`).
+    static func supportedSpeechLocaleIdentifiers() -> [String] {
+        Array(SFSpeechRecognizer.supportedLocales()).map(\.identifier).sorted()
+    }
+
+    /// Picks a supported locale identifier closest to `preferred` (exact match, then same language code).
+    static func resolvedSpeechLocaleIdentifier(_ preferred: String) -> String {
+        let supported = Set(SFSpeechRecognizer.supportedLocales().map(\.identifier))
+        if supported.contains(preferred) { return preferred }
+        let pref = Locale(identifier: preferred)
+        if let code = pref.language.languageCode?.identifier {
+            let matches = supported.filter { Locale(identifier: $0).language.languageCode?.identifier == code }
+                .sorted()
+            if let first = matches.first { return first }
+        }
+        return supported.sorted().first ?? preferred
+    }
+
+    init() {
+        let localeId = Self.resolvedSpeechLocaleIdentifier(Locale.current.identifier)
+        state = ConversationState(
+            history: [],
+            liveTranscript: "",
+            isSpeakerSpeaking: false,
+            isSilent: true,
+            speechAuthorized: false,
+            speechLocaleIdentifier: localeId,
+            lastError: nil
+        )
+    }
+
+    /// SwiftUI `Picker` binding; changing value rotates `SFSpeechRecognizer` while the tap stays live.
+    var speechLocaleIdentifier: String {
+        get { state.speechLocaleIdentifier }
+        set { applySpeechLocaleIdentifier(newValue) }
+    }
+
+    private func applySpeechLocaleIdentifier(_ raw: String) {
+        let resolved = Self.resolvedSpeechLocaleIdentifier(raw)
+        guard resolved != state.speechLocaleIdentifier else { return }
+        var s = state
+        s.speechLocaleIdentifier = resolved
+        state = s
+        speech.applyRecognitionLocale(Locale(identifier: resolved))
+    }
 
     func setSpeechAuthorized(_ granted: Bool) {
         print("[ConversationViewModel] setSpeechAuthorized granted=\(granted)")
@@ -41,7 +88,9 @@ final class ConversationViewModel {
         s.lastError = nil
         state = s
 
+        let locale = Locale(identifier: state.speechLocaleIdentifier)
         speech.start(
+            recognitionLocale: locale,
             onPartial: { [weak self] text in
                 Task { @MainActor in self?.applyPartial(text) }
             },
@@ -56,7 +105,9 @@ final class ConversationViewModel {
             self?.speech.append(buffer)
         }
         lastEnergySpeaking = nil
-        print("[ConversationViewModel] bindToRecorder live tap wired (onLiveBuffer -> speech.append)")
+        print(
+            "[ConversationViewModel] bindToRecorder live tap wired locale=\(locale.identifier) (onLiveBuffer -> speech.append)"
+        )
     }
 
     func unbind(from recorder: CallAudioRecorder) {

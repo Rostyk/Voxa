@@ -25,6 +25,8 @@ struct ConversationState: Sendable {
     /// No partial updates and low energy for a short window (derived in view model).
     var isSilent: Bool
     var speechAuthorized: Bool
+    /// `Locale.identifier` for `SFSpeechRecognizer` (defaults to Mac locale in `ConversationViewModel.init`).
+    var speechLocaleIdentifier: String
     var lastError: String?
 
     static let empty = ConversationState(
@@ -33,6 +35,7 @@ struct ConversationState: Sendable {
         isSpeakerSpeaking: false,
         isSilent: true,
         speechAuthorized: false,
+        speechLocaleIdentifier: Locale.current.identifier,
         lastError: nil
     )
 }

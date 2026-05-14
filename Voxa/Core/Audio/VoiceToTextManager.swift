@@ -15,6 +15,8 @@ final class VoiceToTextManager: @unchecked Sendable {
     private let rmsSpeakingThreshold: Float
     private let maxPendingConvertedChunks: Int
 
+    /// Locale for `SFSpeechRecognizer`; updated when user picks another language while live.
+    private var recognitionLocale: Locale
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
@@ -55,15 +57,41 @@ final class VoiceToTextManager: @unchecked Sendable {
         self.silenceFinalTimeout = silenceFinalTimeout
         self.rmsSpeakingThreshold = rmsSpeakingThreshold
         self.maxPendingConvertedChunks = maxPendingConvertedChunks
+        self.recognitionLocale = Locale.current
+    }
+
+    /// Updates the session locale. If recognition is running, tears down the current task and starts a fresh chain
+    /// so the tap keeps feeding audio without calling `stop` / `start` at the view-model layer.
+    func applyRecognitionLocale(_ locale: Locale) {
+        speechQueue.async { [weak self] in
+            guard let self else { return }
+            self.recognitionLocale = locale
+            self.recognizer = SFSpeechRecognizer(locale: locale)
+            guard self.isRunning else {
+                print("[VoiceToTextManager] applyRecognitionLocale \(locale.identifier) (not running; will use on next start)")
+                return
+            }
+            print("[VoiceToTextManager] applyRecognitionLocale \(locale.identifier) — rotating recognition chain")
+            self.cancelFinalWaitTimer()
+            self.awaitingFinalAfterSilence = false
+            self.pendingConvertedChunks.removeAll(keepingCapacity: false)
+            self.segmentText = ""
+            self.silenceFallbackText = ""
+            self.teardownRecognition()
+            self.beginRecognitionChain()
+            self.onPartial?("")
+        }
     }
 
     func start(
+        recognitionLocale: Locale,
         onPartial: @escaping @Sendable (String) -> Void,
         onCommit: @escaping @Sendable (String) -> Void,
         onEnergy: @escaping @Sendable (Bool) -> Void
     ) {
         speechQueue.async { [weak self] in
             guard let self else { return }
+            self.recognitionLocale = recognitionLocale
             self.appendCount = 0
             self.lastAppendLogAt = CFAbsoluteTimeGetCurrent()
             self.lastPartialLogAt = 0
@@ -79,10 +107,8 @@ final class VoiceToTextManager: @unchecked Sendable {
             self.awaitingFinalAfterSilence = false
             self.silenceFallbackText = ""
             self.pendingConvertedChunks.removeAll(keepingCapacity: true)
-            if self.recognizer == nil {
-                self.recognizer = SFSpeechRecognizer(locale: Locale.current)
-            }
-            let localeID = Locale.current.identifier
+            self.recognizer = SFSpeechRecognizer(locale: self.recognitionLocale)
+            let localeID = self.recognitionLocale.identifier
             let available = self.recognizer?.isAvailable ?? false
             print(
                 "[VoiceToTextManager] start locale=\(localeID) recognizerAvailable=\(available) pauseToCommit=\(self.pauseToCommit)s minAudioSilence=\(self.minAudioSilenceForCommit)s finalTimeout=\(self.silenceFinalTimeout)s rmsThreshold=\(self.rmsSpeakingThreshold)"

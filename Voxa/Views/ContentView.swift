@@ -39,7 +39,7 @@ struct ContentView: View {
                     .frame(height: 60)
                     .frame(maxWidth: .infinity)
 
-                    ConversationTranscriptView(state: conversationViewModel.state)
+                    ConversationTranscriptView(model: conversationViewModel)
                 }
             }
 
