@@ -428,12 +428,16 @@ final class VoiceToTextManager: @unchecked Sendable {
 
     private func teardownRecognition() {
         let hadTask = task != nil
+        // End the buffer request before canceling the task. Cancel-first tends to invalidate the
+        // localspeechrecognition XPC session and surfaces kAFAssistantErrorDomain 1101 in Console.
+        if let r = request {
+            r.endAudio()
+            request = nil
+        }
         task?.cancel()
         task = nil
-        request?.endAudio()
-        request = nil
         if hadTask {
-            print("[VoiceToTextManager] teardownRecognition canceled task, ended audio on request")
+            print("[VoiceToTextManager] teardownRecognition endAudio then cancel")
         }
     }
 
@@ -504,6 +508,9 @@ final class VoiceToTextManager: @unchecked Sendable {
     }
 
     private static func shouldIgnoreRecognitionError(_ error: NSError) -> Bool {
+        // 1101: connection to local speech service invalidated — common when rotating/canceling tasks;
+        // Apple still logs "Received an error while accessing localspeechrecognition" to Console.
+        if error.domain == "kAFAssistantErrorDomain", error.code == 1101 { return true }
         if error.domain == "kAFAssistantErrorDomain", error.code == 216 { return true }
         if error.code == 301 { return true }
         if error.localizedDescription.lowercased().contains("canceled") { return true }

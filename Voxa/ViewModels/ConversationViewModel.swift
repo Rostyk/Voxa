@@ -15,6 +15,7 @@ final class ConversationViewModel {
 
     @ObservationIgnored private let speech = VoiceToTextManager()
     @ObservationIgnored private var lastEnergySpeaking: Bool?
+    @ObservationIgnored private let speechUI = SpeechUIBridge()
 
     /// Locales supported for dictation-style speech on this Mac (same pool as `SFSpeechRecognizer`).
     static func supportedSpeechLocaleIdentifiers() -> [String] {
@@ -37,6 +38,7 @@ final class ConversationViewModel {
             speechLocaleIdentifier: localeId,
             lastError: nil
         )
+        speechUI.attach(host: self)
         captionTranslation.onSupersededTranslation = { [weak self] turnID, transcript, corrected, translation in
             self?.mergeSupersededCaptionIntoTurnIfNeeded(
                 turnID: turnID,
@@ -77,6 +79,7 @@ final class ConversationViewModel {
     func bindToRecorder(_ recorder: CallAudioRecorder) {
         print("[ConversationViewModel] bindToRecorder enter speechAuthorized=\(state.speechAuthorized)")
         recorder.onLiveBuffer = nil
+        speechUI.cancelAll()
         speech.stop()
 
         guard state.speechAuthorized else {
@@ -91,16 +94,17 @@ final class ConversationViewModel {
         state = s
 
         let locale = Locale(identifier: state.speechLocaleIdentifier)
+        let ui = speechUI
         speech.start(
             recognitionLocale: locale,
-            onPartial: { [weak self] text in
-                Task { @MainActor in self?.applyPartial(text) }
+            onPartial: { text in
+                ui.enqueuePartial(text)
             },
-            onCommit: { [weak self] text in
-                Task { @MainActor in self?.applyCommit(text) }
+            onCommit: { text in
+                ui.flushPartialThenCommit(text: text)
             },
-            onEnergy: { [weak self] speaking in
-                Task { @MainActor in self?.applyEnergy(speaking) }
+            onEnergy: { speaking in
+                ui.enqueueEnergy(speaking)
             }
         )
         recorder.onLiveBuffer = { [weak self] buffer in
@@ -108,40 +112,45 @@ final class ConversationViewModel {
         }
         lastEnergySpeaking = nil
         print(
-            "[ConversationViewModel] bindToRecorder live tap wired locale=\(locale.identifier) (onLiveBuffer -> speech.append)"
+            "[ConversationViewModel] bindToRecorder live tap wired locale=\(locale.identifier) (onLiveBuffer -> speech.append; UI debounced)"
         )
     }
 
     func unbind(from recorder: CallAudioRecorder) {
         print("[ConversationViewModel] unbind")
         recorder.onLiveBuffer = nil
+        speechUI.cancelAll()
         speech.stop()
         var s = state
         s.liveTranscript = ""
         s.isSpeakerSpeaking = false
         s.isSilent = true
         state = s
-        captionTranslation.onStoppedListening()
+        // TEMP: translation pipeline off — uncomment to re-enable.
+        // captionTranslation.onStoppedListening()
     }
 
     func clearConversation() {
         print("[ConversationViewModel] clearConversation")
+        speechUI.cancelAll()
         var s = state
         s.history = []
         s.liveTranscript = ""
         state = s
-        captionTranslation.onLiveTranscriptChanged("")
+        // TEMP: translation pipeline off — uncomment to re-enable.
+        // captionTranslation.onLiveTranscriptChanged("")
     }
 
-    private func applyPartial(_ text: String) {
+    fileprivate func applyPartial(_ text: String) {
         var s = state
         s.liveTranscript = text
         s.isSilent = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !s.isSpeakerSpeaking
         state = s
-        captionTranslation.onLiveTranscriptChanged(text)
+        // TEMP: translation pipeline off — uncomment to re-enable (this call starts the debouncer / network).
+        // captionTranslation.onLiveTranscriptChanged(text)
     }
 
-    private func applyCommit(_ text: String) {
+    fileprivate func applyCommit(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let snapCorrected = captionTranslation.liveCorrected.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -160,7 +169,8 @@ final class ConversationViewModel {
         s.liveTranscript = ""
         s.isSilent = !s.isSpeakerSpeaking
         state = s
-        captionTranslation.onSegmentCommitted(lateCaptionTurnID: turn.id, committedTranscript: trimmed)
+        // TEMP: translation pipeline off — uncomment to re-enable.
+        // captionTranslation.onSegmentCommitted(lateCaptionTurnID: turn.id, committedTranscript: trimmed)
         print(
             "[ConversationViewModel] applyCommit historyCount=\(s.history.count) chars=\(trimmed.count) \(Self.commitLogPreview(trimmed))"
         )
@@ -217,7 +227,7 @@ final class ConversationViewModel {
         return "preview=\"\(t[..<idx])…\""
     }
 
-    private func applyEnergy(_ speaking: Bool) {
+    fileprivate func applyEnergy(_ speaking: Bool) {
         if lastEnergySpeaking != speaking {
             print("[ConversationViewModel] applyEnergy speaking=\(speaking) (was \(String(describing: lastEnergySpeaking)))")
             lastEnergySpeaking = speaking
@@ -227,5 +237,92 @@ final class ConversationViewModel {
         let empty = s.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         s.isSilent = empty && !speaking
         state = s
+    }
+}
+
+// MARK: - Debounced speech → MainActor UI
+
+/// Coalesces high-frequency STT / RMS callbacks off the audio/speech queues into occasional MainActor updates.
+private final class SpeechUIBridge: @unchecked Sendable {
+
+    private let queue = DispatchQueue(label: "com.voxa.conversation.speechUI")
+
+    private weak var host: ConversationViewModel?
+
+    private var partialLatest: String = ""
+    private var partialFlush: DispatchWorkItem?
+
+    private var energyLatest: Bool = false
+    private var energyFlush: DispatchWorkItem?
+
+    private static let partialDebounce: TimeInterval = 0.048
+    private static let energyDebounce: TimeInterval = 0.096
+
+    func attach(host: ConversationViewModel) {
+        self.host = host
+    }
+
+    func enqueuePartial(_ text: String) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.partialLatest = text
+            self.partialFlush?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, let host = self.host else { return }
+                let t = self.partialLatest
+                Task { @MainActor in
+                    host.applyPartial(t)
+                }
+            }
+            self.partialFlush = work
+            self.queue.asyncAfter(deadline: .now() + Self.partialDebounce, execute: work)
+        }
+    }
+
+    func enqueueEnergy(_ speaking: Bool) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.energyLatest = speaking
+            self.energyFlush?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, let host = self.host else { return }
+                let v = self.energyLatest
+                Task { @MainActor in
+                    host.applyEnergy(v)
+                }
+            }
+            self.energyFlush = work
+            self.queue.asyncAfter(deadline: .now() + Self.energyDebounce, execute: work)
+        }
+    }
+
+    /// Apply any pending partial text, then commit — keeps `liveTranscript` in sync before history append.
+    func flushPartialThenCommit(text: String) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.partialFlush?.cancel()
+            self.partialFlush = nil
+            let pending = self.partialLatest
+            self.partialLatest = ""
+            self.energyFlush?.cancel()
+            self.energyFlush = nil
+            Task { @MainActor in
+                guard let host = self.host else { return }
+                if !pending.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    host.applyPartial(pending)
+                }
+                host.applyCommit(text)
+            }
+        }
+    }
+
+    func cancelAll() {
+        queue.sync {
+            partialFlush?.cancel()
+            partialFlush = nil
+            partialLatest = ""
+            energyFlush?.cancel()
+            energyFlush = nil
+        }
     }
 }
