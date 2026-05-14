@@ -59,6 +59,11 @@ struct ContentView: View {
                 conversationViewModel.unbind(from: recorder)
             }
         }
+        .onChange(of: conversationViewModel.state.speechAuthorized) { _, granted in
+            guard granted, micGranted, systemAudioGranted else { return }
+            guard callViewModel.isRecording, let recorder = callViewModel.recorder else { return }
+            conversationViewModel.bindToRecorder(recorder)
+        }
         .onAppear {
             guard micGranted, systemAudioGranted else { return }
             if callViewModel.isRecording, let recorder = callViewModel.recorder {
@@ -155,12 +160,16 @@ struct ContentView: View {
             }
             permissionPhase = ""
             permissionMessage = nil
-            callViewModel.activate()
         }
 
+        guard systemOK else { return }
+
+        // Speech must be set before activate(): otherwise recording can start, onChange binds
+        // while speechAuthorized is still false, bind aborts, and nothing re-triggers bind.
         let speechOK = await requestSpeechAuthorization()
         await MainActor.run {
             conversationViewModel.setSpeechAuthorized(speechOK)
+            callViewModel.activate()
         }
     }
 

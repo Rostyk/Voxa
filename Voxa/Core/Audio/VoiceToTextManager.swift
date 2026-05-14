@@ -3,13 +3,17 @@ import Foundation
 import Speech
 
 /// Streams tap `AVAudioPCMBuffer` into `SFSpeechAudioBufferRecognitionRequest` (Apple’s live pattern:
-/// `append(_:)` + partial results, periodic `endAudio` + new request for phrase boundaries).
-/// Thread-safe entry: `append` may be called from the tap queue.
+/// `append(_:)` + partial results). Bubble boundaries use **real audio silence** plus partial quiet,
+/// then `endAudio` and wait for a **final** result while **queueing** PCM so nothing is dropped
+/// at segment rotation. Stale task callbacks are ignored via `recognitionGeneration`.
 final class VoiceToTextManager: @unchecked Sendable {
 
     private let speechQueue = DispatchQueue(label: "com.voxa.voicetotext", qos: .userInitiated)
     private let pauseToCommit: TimeInterval
+    private let minAudioSilenceForCommit: TimeInterval
+    private let silenceFinalTimeout: TimeInterval
     private let rmsSpeakingThreshold: Float
+    private let maxPendingConvertedChunks: Int
 
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -20,7 +24,15 @@ final class VoiceToTextManager: @unchecked Sendable {
     private var isRunning = false
     private var segmentText = ""
     private var lastPartialAt: CFAbsoluteTime = 0
+    private var lastLoudAudioAt: CFAbsoluteTime = 0
     private var pollTimer: DispatchSourceTimer?
+    private var finalWaitTimer: DispatchSourceTimer?
+
+    private var recognitionGeneration = 0
+
+    private var awaitingFinalAfterSilence = false
+    private var silenceFallbackText = ""
+    private var pendingConvertedChunks: [AVAudioPCMBuffer] = []
 
     private var onPartial: (@Sendable (String) -> Void)?
     private var onCommit: (@Sendable (String) -> Void)?
@@ -31,9 +43,18 @@ final class VoiceToTextManager: @unchecked Sendable {
     private var lastPartialLogAt: CFAbsoluteTime = 0
     private var lastPartialLogCharCount = 0
 
-    init(pauseToCommit: TimeInterval = 0.95, rmsSpeakingThreshold: Float = 0.014) {
+    init(
+        pauseToCommit: TimeInterval = 0.95,
+        minAudioSilenceForCommit: TimeInterval = 0.55,
+        silenceFinalTimeout: TimeInterval = 2.8,
+        rmsSpeakingThreshold: Float = 0.014,
+        maxPendingConvertedChunks: Int = 280
+    ) {
         self.pauseToCommit = pauseToCommit
+        self.minAudioSilenceForCommit = minAudioSilenceForCommit
+        self.silenceFinalTimeout = silenceFinalTimeout
         self.rmsSpeakingThreshold = rmsSpeakingThreshold
+        self.maxPendingConvertedChunks = maxPendingConvertedChunks
     }
 
     func start(
@@ -52,14 +73,19 @@ final class VoiceToTextManager: @unchecked Sendable {
             self.onEnergy = onEnergy
             self.isRunning = true
             self.segmentText = ""
-            self.lastPartialAt = CFAbsoluteTimeGetCurrent()
+            let now = CFAbsoluteTimeGetCurrent()
+            self.lastPartialAt = now
+            self.lastLoudAudioAt = now
+            self.awaitingFinalAfterSilence = false
+            self.silenceFallbackText = ""
+            self.pendingConvertedChunks.removeAll(keepingCapacity: true)
             if self.recognizer == nil {
                 self.recognizer = SFSpeechRecognizer(locale: Locale.current)
             }
             let localeID = Locale.current.identifier
             let available = self.recognizer?.isAvailable ?? false
             print(
-                "[VoiceToTextManager] start locale=\(localeID) recognizerAvailable=\(available) pauseToCommit=\(self.pauseToCommit)s rmsThreshold=\(self.rmsSpeakingThreshold)"
+                "[VoiceToTextManager] start locale=\(localeID) recognizerAvailable=\(available) pauseToCommit=\(self.pauseToCommit)s minAudioSilence=\(self.minAudioSilenceForCommit)s finalTimeout=\(self.silenceFinalTimeout)s rmsThreshold=\(self.rmsSpeakingThreshold)"
             )
             self.beginRecognitionChain()
             self.startSilencePoller()
@@ -71,11 +97,21 @@ final class VoiceToTextManager: @unchecked Sendable {
             guard let self else { return }
             let pending = self.segmentText.trimmingCharacters(in: .whitespacesAndNewlines)
             print(
-                "[VoiceToTextManager] stop appendCount=\(self.appendCount) pendingSegmentChars=\(pending.count)"
+                "[VoiceToTextManager] stop appendCount=\(self.appendCount) awaitingFinal=\(self.awaitingFinalAfterSilence) pendingSegmentChars=\(pending.count)"
             )
             self.isRunning = false
             self.stopSilencePoller()
-            if !pending.isEmpty {
+            self.cancelFinalWaitTimer()
+            if self.awaitingFinalAfterSilence {
+                self.awaitingFinalAfterSilence = false
+                let seg = self.segmentText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let fb = self.silenceFallbackText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let best = Self.bestCommitText(preferredFinal: "", fallbacks: [seg, fb])
+                if !best.isEmpty {
+                    self.commitSegment(best, reason: "stop during silence await")
+                }
+                self.pendingConvertedChunks.removeAll(keepingCapacity: false)
+            } else if !pending.isEmpty {
                 self.commitSegment(self.segmentText, reason: "stop flush")
             }
             self.teardownRecognition()
@@ -90,19 +126,36 @@ final class VoiceToTextManager: @unchecked Sendable {
     func append(_ buffer: AVAudioPCMBuffer) {
         speechQueue.async { [weak self] in
             guard let self else { return }
-            guard self.isRunning, let request = self.request else { return }
+            guard self.isRunning else { return }
+
             let srcSig = Self.formatSignature(buffer.format)
             guard let chunk = self.convertToSpeechFormat(buffer) else {
                 print("[VoiceToTextManager] append convert failed srcFormat=\(srcSig) frames=\(buffer.frameLength)")
                 return
             }
-            request.append(chunk)
+
+            let now = CFAbsoluteTimeGetCurrent()
             let rms = Self.monoRMS(chunk)
             let speaking = rms > self.rmsSpeakingThreshold
+            if speaking {
+                self.lastLoudAudioAt = now
+            }
             self.onEnergy?(speaking)
 
+            if self.awaitingFinalAfterSilence {
+                if self.pendingConvertedChunks.count >= self.maxPendingConvertedChunks {
+                    self.pendingConvertedChunks.removeFirst(self.pendingConvertedChunks.count / 4)
+                    print("[VoiceToTextManager] pending chunk ring dropped 25% (cap=\(self.maxPendingConvertedChunks))")
+                }
+                self.pendingConvertedChunks.append(chunk)
+                self.appendCount += 1
+                return
+            }
+
+            guard let request = self.request else { return }
+            request.append(chunk)
+
             self.appendCount += 1
-            let now = CFAbsoluteTimeGetCurrent()
             if self.appendCount == 1 {
                 print(
                     "[VoiceToTextManager] first buffer appended srcFormat=\(srcSig) -> 16k mono float framesIn=\(buffer.frameLength) framesOut=\(chunk.frameLength) rms=\(String(format: "%.5f", rms)) speaking=\(speaking)"
@@ -122,10 +175,18 @@ final class VoiceToTextManager: @unchecked Sendable {
         teardownRecognition()
         guard let rec = recognizer else {
             print("[VoiceToTextManager] beginRecognitionChain aborted — no SFSpeechRecognizer")
+            if !pendingConvertedChunks.isEmpty {
+                print("[VoiceToTextManager] dropping \(pendingConvertedChunks.count) pending chunk(s)")
+                pendingConvertedChunks.removeAll(keepingCapacity: false)
+            }
             return
         }
         guard rec.isAvailable else {
             print("[VoiceToTextManager] beginRecognitionChain aborted — recognizer not available (locale=\(rec.locale.identifier))")
+            if !pendingConvertedChunks.isEmpty {
+                print("[VoiceToTextManager] dropping \(pendingConvertedChunks.count) pending chunk(s)")
+                pendingConvertedChunks.removeAll(keepingCapacity: false)
+            }
             return
         }
         let req = SFSpeechAudioBufferRecognitionRequest()
@@ -134,9 +195,17 @@ final class VoiceToTextManager: @unchecked Sendable {
             req.addsPunctuation = true
         }
         request = req
+        recognitionGeneration += 1
+        let myGeneration = recognitionGeneration
         task = rec.recognitionTask(with: req) { [weak self] result, error in
             guard let self else { return }
             self.speechQueue.async {
+                guard myGeneration == self.recognitionGeneration else {
+                    print(
+                        "[VoiceToTextManager] stale recognition callback ignored myGen=\(myGeneration) activeGen=\(self.recognitionGeneration)"
+                    )
+                    return
+                }
                 self.handleRecognition(result: result, error: error)
             }
         }
@@ -147,11 +216,17 @@ final class VoiceToTextManager: @unchecked Sendable {
             addsPunctuation = false
         }
         print(
-            "[VoiceToTextManager] beginRecognitionChain task started partialResults=true addsPunctuation=\(addsPunctuation)"
+            "[VoiceToTextManager] beginRecognitionChain gen=\(myGeneration) partialResults=true addsPunctuation=\(addsPunctuation)"
         )
+        flushPendingConvertedChunksToRequest()
     }
 
     private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?) {
+        if awaitingFinalAfterSilence {
+            handleRecognitionWhileAwaitingFinal(result: result, error: error)
+            return
+        }
+
         if let error = error as NSError? {
             if Self.shouldIgnoreRecognitionError(error) {
                 print(
@@ -172,18 +247,7 @@ final class VoiceToTextManager: @unchecked Sendable {
             segmentText = text
             lastPartialAt = CFAbsoluteTimeGetCurrent()
             onPartial?(text)
-            let now = CFAbsoluteTimeGetCurrent()
-            let charDelta = abs(text.count - lastPartialLogCharCount)
-            let timeDelta = now - lastPartialLogAt
-            let shouldLogPartial = result.isFinal || charDelta >= 12 || timeDelta >= 0.35
-            if shouldLogPartial {
-                lastPartialLogAt = now
-                lastPartialLogCharCount = text.count
-                let preview = Self.logPreview(text)
-                print(
-                    "[VoiceToTextManager] partial isFinal=\(result.isFinal) chars=\(text.count) \(preview)"
-                )
-            }
+            logPartialThrottled(result: result, text: text)
             if result.isFinal, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 commitSegment(text, reason: "isFinal")
                 beginRecognitionChain()
@@ -191,6 +255,106 @@ final class VoiceToTextManager: @unchecked Sendable {
         } else if error == nil {
             print("[VoiceToTextManager] recognition callback nil result, nil error (stream end?)")
         }
+    }
+
+    private func handleRecognitionWhileAwaitingFinal(result: SFSpeechRecognitionResult?, error: Error?) {
+        if let result {
+            let text = result.bestTranscription.formattedString
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, trimmed.count > silenceFallbackText.count {
+                silenceFallbackText = trimmed
+            }
+            segmentText = text
+            lastPartialAt = CFAbsoluteTimeGetCurrent()
+            onPartial?(text)
+            logPartialThrottled(result: result, text: text)
+
+            if result.isFinal {
+                let fromApple = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let best = Self.bestCommitText(preferredFinal: fromApple, fallbacks: [silenceFallbackText, segmentText])
+                print(
+                    "[VoiceToTextManager] silence await got isFinal appleChars=\(fromApple.count) chosenChars=\(best.count) pendingChunks=\(pendingConvertedChunks.count)"
+                )
+                exitSilenceAwaitAndRotate(chosenText: best, reason: "final")
+            }
+            return
+        }
+
+        if let error = error as NSError? {
+            if Self.shouldIgnoreRecognitionError(error) {
+                return
+            }
+            print(
+                "[VoiceToTextManager] silence await error domain=\(error.domain) code=\(error.code) \(error.localizedDescription) — rotating with fallbacks"
+            )
+            let best = Self.bestCommitText(preferredFinal: "", fallbacks: [silenceFallbackText, segmentText])
+            exitSilenceAwaitAndRotate(chosenText: best, reason: "error")
+            return
+        }
+    }
+
+    private func exitSilenceAwaitAndRotate(chosenText: String, reason: String) {
+        guard awaitingFinalAfterSilence else { return }
+        awaitingFinalAfterSilence = false
+        cancelFinalWaitTimer()
+
+        let trimmed = chosenText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            commitSegment(trimmed, reason: "silence+\(reason)")
+        } else {
+            onPartial?("")
+        }
+        segmentText = ""
+        teardownRecognition()
+        beginRecognitionChain()
+    }
+
+    private func enterSilenceEndAudioPhase() {
+        guard let req = request else { return }
+        guard !awaitingFinalAfterSilence else { return }
+        let trimmed = segmentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        awaitingFinalAfterSilence = true
+        silenceFallbackText = trimmed
+        print(
+            "[VoiceToTextManager] silence -> endAudio awaiting final fallbackChars=\(silenceFallbackText.count) \(Self.logPreview(silenceFallbackText))"
+        )
+        req.endAudio()
+        request = nil
+        scheduleFinalWaitTimeout()
+    }
+
+    private func scheduleFinalWaitTimeout() {
+        cancelFinalWaitTimer()
+        let t = DispatchSource.makeTimerSource(queue: speechQueue)
+        t.schedule(deadline: .now() + silenceFinalTimeout)
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            guard self.awaitingFinalAfterSilence else { return }
+            let best = Self.bestCommitText(preferredFinal: "", fallbacks: [self.silenceFallbackText, self.segmentText])
+            print(
+                "[VoiceToTextManager] silence await timeout pendingChunks=\(self.pendingConvertedChunks.count) chosenChars=\(best.count)"
+            )
+            self.exitSilenceAwaitAndRotate(chosenText: best, reason: "timeout")
+        }
+        t.resume()
+        finalWaitTimer = t
+    }
+
+    private func cancelFinalWaitTimer() {
+        finalWaitTimer?.cancel()
+        finalWaitTimer = nil
+    }
+
+    private func flushPendingConvertedChunksToRequest() {
+        guard let req = request, !pendingConvertedChunks.isEmpty else { return }
+        let n = pendingConvertedChunks.count
+        for chunk in pendingConvertedChunks {
+            req.append(chunk)
+        }
+        pendingConvertedChunks.removeAll(keepingCapacity: true)
+        print("[VoiceToTextManager] flushed \(n) pending converted chunk(s) into new request")
     }
 
     private func commitSegment(_ text: String, reason: String) {
@@ -221,16 +385,19 @@ final class VoiceToTextManager: @unchecked Sendable {
 
     private func tickSilence() {
         guard isRunning else { return }
+        if awaitingFinalAfterSilence { return }
         let now = CFAbsoluteTimeGetCurrent()
         let quietFor = now - lastPartialAt
         let trimmed = segmentText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if quietFor >= pauseToCommit, !trimmed.isEmpty {
-            print(
-                "[VoiceToTextManager] silence commit quietFor=\(String(format: "%.2f", quietFor))s >= pause=\(pauseToCommit)s segmentChars=\(trimmed.count)"
-            )
-            commitSegment(segmentText, reason: "silence")
-            beginRecognitionChain()
+        let audioQuietFor = now - lastLoudAudioAt
+        guard quietFor >= pauseToCommit, !trimmed.isEmpty else { return }
+        guard audioQuietFor >= minAudioSilenceForCommit else {
+            return
         }
+        print(
+            "[VoiceToTextManager] silence gate passed quietPartial=\(String(format: "%.2f", quietFor))s audioSilent=\(String(format: "%.2f", audioQuietFor))s segmentChars=\(trimmed.count)"
+        )
+        enterSilenceEndAudioPhase()
     }
 
     private func teardownRecognition() {
@@ -285,6 +452,29 @@ final class VoiceToTextManager: @unchecked Sendable {
         }
         guard out.frameLength > 0 else { return nil }
         return out
+    }
+
+    private func logPartialThrottled(result: SFSpeechRecognitionResult, text: String) {
+        let now = CFAbsoluteTimeGetCurrent()
+        let charDelta = abs(text.count - lastPartialLogCharCount)
+        let timeDelta = now - lastPartialLogAt
+        let shouldLogPartial = result.isFinal || charDelta >= 12 || timeDelta >= 0.35
+        if shouldLogPartial {
+            lastPartialLogAt = now
+            lastPartialLogCharCount = text.count
+            let preview = Self.logPreview(text)
+            print(
+                "[VoiceToTextManager] partial isFinal=\(result.isFinal) chars=\(text.count) \(preview)"
+            )
+        }
+    }
+
+    private static func bestCommitText(preferredFinal: String, fallbacks: [String]) -> String {
+        let p = preferredFinal.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !p.isEmpty { return p }
+        return fallbacks
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .max(by: { $0.count < $1.count }) ?? ""
     }
 
     private static func shouldIgnoreRecognitionError(_ error: NSError) -> Bool {
