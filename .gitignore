@@ -1,0 +1,46 @@
+# Build products & indexes
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+
+# Xcode — user-specific (incl. xcuserstate)
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.hmap
+*.xcuserdatad
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# CocoaPods (if used later)
+Pods/
+
+# Carthage (if used later)
+Carthage/Build/
+
+# Accio (if used later)
+Dependencies/
+.accio/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDEs
+.idea/
+*.swp
+*~
+
+# Archives & logs
+*.xcarchive
+*.log
+
+# Repo root — generated / vendored binaries (not in git)
+/output/
+/Voxa.xcframework/
