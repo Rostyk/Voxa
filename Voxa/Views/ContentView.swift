@@ -40,12 +40,16 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
 
                     ConversationTranscriptView(model: conversationViewModel)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                } else {
+                    Spacer(minLength: 0)
                 }
+            } else {
+                Spacer(minLength: 0)
             }
-
-            Spacer(minLength: 0)
         }
         .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .frame(minWidth: 480, minHeight: 280)
         .task {
             await requestPermissionsAndStart()

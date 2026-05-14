@@ -53,7 +53,7 @@
       <EnvironmentVariables>
          <EnvironmentVariable
             key = "OPEN_AI_KEY"
-            value = "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"
+            value = ""
             isEnabled = "YES">
          </EnvironmentVariable>
          <EnvironmentVariable

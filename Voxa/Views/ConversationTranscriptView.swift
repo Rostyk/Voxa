@@ -11,74 +11,92 @@ struct ConversationTranscriptView: View {
     var body: some View {
         @Bindable var caption = model.captionTranslation
 
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("Live transcript")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                statusChip
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            captionSettingsCard(
+                speechLocale: $model.speechLocaleIdentifier,
+                translationEngine: $caption.translationEngine,
+                translationLocale: $caption.translationLocaleIdentifier,
+                translationLastError: caption.translationLastError
+            )
+            transcriptCard(caption: caption)
+                .layoutPriority(1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sheet(isPresented: $showCallContextSheet) {
+            callContextEditorSheet(isPresented: $showCallContextSheet, notes: $caption.callContextNotes)
+        }
+    }
 
-            HStack(alignment: .center, spacing: 12) {
-                HStack(spacing: 6) {
-                    Text("Language")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Picker("", selection: $model.speechLocaleIdentifier) {
-                        ForEach(ConversationViewModel.supportedSpeechLocaleIdentifiers(), id: \.self) { id in
-                            Text(menuTitle(for: id)).tag(id)
+    @ViewBuilder
+    private func captionSettingsCard(
+        speechLocale: Binding<String>,
+        translationEngine: Binding<LiveCaptionTranslationEngine>,
+        translationLocale: Binding<String>,
+        translationLastError: String?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Speech & translation")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 12) {
+                    HStack(spacing: 6) {
+                        Text("Language")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Picker("", selection: speechLocale) {
+                            ForEach(ConversationViewModel.supportedSpeechLocaleIdentifiers(), id: \.self) { id in
+                                Text(menuTitle(for: id)).tag(id)
+                            }
                         }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: 200, alignment: .trailing)
+                        .labelsHidden()
                     }
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: 200, alignment: .trailing)
-                    .labelsHidden()
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Speech recognition language")
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Speech recognition language")
 
-                HStack(spacing: 6) {
-                    Text("Via")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Picker("", selection: $caption.translationEngine) {
-                        ForEach(LiveCaptionTranslationEngine.allCases) { engine in
-                            Text(engine.displayName).tag(engine)
+                    HStack(spacing: 6) {
+                        Text("Via")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Picker("", selection: translationEngine) {
+                            ForEach(LiveCaptionTranslationEngine.allCases) { engine in
+                                Text(engine.displayName).tag(engine)
+                            }
                         }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: 200, alignment: .trailing)
+                        .labelsHidden()
                     }
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: 200, alignment: .trailing)
-                    .labelsHidden()
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Translation engine")
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Translation engine")
 
-                HStack(spacing: 6) {
-                    Text("Translate to")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Picker("", selection: $caption.translationLocaleIdentifier) {
-                        ForEach(CaptionTranslationViewModel.supportedTranslationLocaleIdentifiers(), id: \.self) { id in
-                            Text(menuTitle(for: id)).tag(id)
+                    Spacer(minLength: 0)
+                }
+
+                HStack(alignment: .center, spacing: 12) {
+                    HStack(spacing: 6) {
+                        Text("Translate to")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Picker("", selection: translationLocale) {
+                            ForEach(CaptionTranslationViewModel.supportedTranslationLocaleIdentifiers(), id: \.self) { id in
+                                Text(menuTitle(for: id)).tag(id)
+                            }
                         }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: 200, alignment: .trailing)
+                        .labelsHidden()
                     }
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: 200, alignment: .trailing)
-                    .labelsHidden()
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Translation target language")
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Translation target language")
 
-                Button {
-                    showCallContextSheet = true
-                } label: {
-                    Label("Call context", systemImage: "text.badge.plus")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Optional notes about this call — used in the ChatGPT translation prompt only (Google Translate ignores this).")
+                    callContextButton
 
-                Spacer(minLength: 0)
+                    Spacer(minLength: 0)
+                }
             }
 
             if let err = state.lastError {
@@ -88,11 +106,37 @@ struct ConversationTranscriptView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if let tErr = caption.translationLastError {
+            if let tErr = translationLastError {
                 Text(tErr)
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .transcriptPanelChrome()
+    }
+
+    private var callContextButton: some View {
+        Button {
+            showCallContextSheet = true
+        } label: {
+            Label("Call context", systemImage: "text.badge.plus")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Optional notes about this call — used in the ChatGPT translation prompt only (Google Translate ignores this).")
+    }
+
+    @ViewBuilder
+    private func transcriptCard(caption: CaptionTranslationViewModel) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("Live transcript")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                statusChip
             }
 
             ScrollViewReader { proxy in
@@ -136,20 +180,11 @@ struct ConversationTranscriptView: View {
                     }
                 }
             }
-            .frame(minHeight: 120, maxHeight: 220)
+            .frame(minHeight: 120, maxHeight: .infinity)
         }
         .padding(14)
-        .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.92))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
-        }
-        .sheet(isPresented: $showCallContextSheet) {
-            callContextEditorSheet(isPresented: $showCallContextSheet, notes: $caption.callContextNotes)
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .transcriptPanelChrome()
     }
 
     private func menuTitle(for identifier: String) -> String {
@@ -271,6 +306,22 @@ struct ConversationTranscriptView: View {
                     Button("Apply") { isPresented.wrappedValue = false }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Panel chrome
+
+private extension View {
+    @ViewBuilder
+    func transcriptPanelChrome() -> some View {
+        background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.92))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
         }
     }
 }
