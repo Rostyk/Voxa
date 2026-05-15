@@ -7,6 +7,7 @@ import VoxaSDK
 struct ContentView: View {
     @State private var callViewModel = CallViewModel.shared
     @State private var conversationViewModel = ConversationViewModel()
+    @State private var virtualMicStatus = VoxaVirtualMicFeederStatus.shared
     @State private var micGranted = false
     @State private var systemAudioGranted = false
     @State private var permissionMessage: String?
@@ -24,6 +25,7 @@ struct ContentView: View {
             }
 
             if micGranted && systemAudioGranted {
+                virtualMicStatusCard
                 callStatusCard
 
                 if let recorder = callViewModel.recorder, callViewModel.isRecording {
@@ -73,6 +75,66 @@ struct ContentView: View {
             if callViewModel.isRecording, let recorder = callViewModel.recorder {
                 conversationViewModel.bindToRecorder(recorder)
             }
+        }
+    }
+
+    private var virtualMicStatusCard: some View {
+        let status = virtualMicStatus
+        let tint: Color = {
+            if status.isHealthy { return .green }
+            if status.isRunning { return .orange }
+            return .secondary
+        }()
+        let icon = status.isHealthy ? "mic.fill" : (status.isRunning ? "mic.badge.xmark" : "mic.slash")
+        let headline: String = {
+            if status.isHealthy {
+                return "Virtual mic active"
+            }
+            if status.isRunning {
+                return "Virtual mic active (check settings)"
+            }
+            return "Virtual mic not running"
+        }()
+        let subline: String = {
+            if let detail = status.detailMessage { return detail }
+            if status.isRunning, let name = status.captureDeviceName {
+                return "Capturing “\(name)” for Meet / QuickTime. Select “Voxa Virtual Microphone” there."
+            }
+            return "Starts automatically after microphone access is granted."
+        }()
+
+        return HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(tint.opacity(0.15))
+                    .frame(width: 44, height: 44)
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(tint)
+            }
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(headline)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                Text(subline)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
         }
     }
 

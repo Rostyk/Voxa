@@ -19,6 +19,7 @@ final class CallViewModel {
     private var isSettingUpRecording = false
     private var lastMicProcessSnapshot: Set<AudioProcess.ID>?
     private var refreshTimer: Timer?
+    private var isMonitoringActivated = false
 
     var activeMicrophoneProcesses: [AudioProcess] { audioProcessManager.activeMicrophoneProcesses }
 
@@ -27,6 +28,8 @@ final class CallViewModel {
     }
 
     func activate() {
+        guard !isMonitoringActivated else { return }
+        isMonitoringActivated = true
         audioProcessManager.activate()
         startRefreshTimer()
     }
@@ -68,6 +71,15 @@ final class CallViewModel {
         lastMicProcessSnapshot = Set(audioProcessManager.activeMicrophoneProcesses.map(\.id))
 
         isSettingUpRecording = false
+        scheduleVirtualMicFeederStart()
+    }
+
+    /// Start virtual-mic capture after system-audio taps are up (early start races and never receives callbacks).
+    private func scheduleVirtualMicFeederStart() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            VoxaVirtualMicFeeder.shared.startIfNeeded()
+        }
     }
 
     func stopRecording(userInitiated: Bool = false) {
@@ -88,8 +100,9 @@ final class CallViewModel {
 
     private func handleMicrophoneProcessesChanged(_ newProcesses: [AudioProcess]) {
         let autoScanBool = true
-        print("[CallViewModel] micChanged count=\(newProcesses.count) autoScan=\(autoScanBool) isRecording=\(isRecording)")
+        print("[CallViewModel] micChanged count=\(newProcesses.count) autoScan=\(autoScanBool) isRecording=\(isRecording) activated=\(isMonitoringActivated)")
 
+        guard isMonitoringActivated else { return }
         guard autoScanBool else { return }
 
         let micIsActive = !newProcesses.isEmpty

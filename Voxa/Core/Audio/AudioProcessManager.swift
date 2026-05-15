@@ -13,6 +13,7 @@ final class AudioProcessManager {
     private(set) var activeAudioProcesses: [AudioProcess] = []
     private(set) var activeMicrophoneProcesses: [AudioProcess] = []
     private(set) var foregroundProcess: AudioProcess?
+    private var isActivated = false
 
     init() {
         sdkDetector = VoxaAudioKit()
@@ -20,8 +21,11 @@ final class AudioProcessManager {
     }
 
     func activate() {
+        guard !isActivated else { return }
+        isActivated = true
         print("[AudioProcessManager] activate")
         startMonitoring()
+        updateProcessLists()
     }
 
     private func mapProcess(_ sdkProcess: VOAudioProcess) -> AudioProcess {
@@ -75,6 +79,7 @@ final class AudioProcessManager {
     }
 
     private func updateProcessLists() {
+        guard isActivated else { return }
         guard let sdkDetector else { return }
         sdkDetector.scan(onlyWithMicrophoneInput: false) { [weak self] sdkProcesses, _ in
             self?.applySDKAudioProcessUpdate(sdkProcesses)
