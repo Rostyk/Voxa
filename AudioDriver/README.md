@@ -6,7 +6,7 @@
 
 ## Build
 
-Requires [libASPL](https://github.com/gavv/libASPL) checked out at `../../libASPL` (sibling of the `Voxa` folder).
+Uses vendored [libASPL](https://github.com/gavv/libASPL) at `../libASPL` (repo root).
 
 ```bash
 cd AudioDriver

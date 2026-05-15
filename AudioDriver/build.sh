@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="${ROOT}/build"
-LIBASPL="${ROOT}/../../libASPL"
+LIBASPL="${ROOT}/../libASPL"
 
 if [[ ! -d "${LIBASPL}" ]]; then
-  echo "libASPL not found at ${LIBASPL} — clone https://github.com/gavv/libASPL next to Voxa"
+  echo "libASPL not found at ${LIBASPL} (expected vendored copy in repo root)"
   exit 1
 fi
 

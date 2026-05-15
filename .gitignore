@@ -44,3 +44,12 @@ Dependencies/
 # Repo root — generated / vendored binaries (not in git)
 /output/
 /Voxa.xcframework/
+
+# VoxaMic HAL driver (CMake)
+AudioDriver/build/
+
+# libASPL — source is vendored; ignore local CMake artifacts
+libASPL/build/
+
+# Runtime ring file (created by Voxa.app + driver)
+# Not in repo; lives at /var/tmp/com.aurigin.voxa.virtual_mic.ring

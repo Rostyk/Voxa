@@ -18,7 +18,7 @@ message(STATUS "VoxaMic driver name - ${DRIVER_NAME}")
 message(STATUS "VoxaMic codesign ID - ${CODESIGN_ID}")
 
 get_filename_component(LIBASPL_SOURCE_DIR
-  ${CMAKE_CURRENT_LIST_DIR}/../../../libASPL
+  ${CMAKE_CURRENT_LIST_DIR}/../../libASPL
   ABSOLUTE)
 
 set(LIBASPL_TARGET VoxaMic_libASPL)
