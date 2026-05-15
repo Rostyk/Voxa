@@ -1,15 +1,18 @@
 import AVFoundation
+import Darwin
 import Foundation
 
-/// Streams PCM into the virtual-mic ring (shared by DTMF and speech feeders).
+/// Streams PCM into the virtual-mic ring (shared by TTS, WAV, DTMF feeders).
 enum VoxaMicRingPCMStreamer {
     private static let framesPerChunk: AVAudioFrameCount = 512
+    /// Matches `VoxaMicRingReadSequentialFrames` default latency in the driver.
+    private static let driverLatencyFrames = 2400
 
     struct Options: Sendable {
-        /// When true, sleep between chunks so `writeFrameIndex` advances at ~real time (required for DTMF / IVR).
         var paceRealtime = false
-        /// Linear gain applied to int16 samples before writing (DTMF tones benefit from a small boost).
         var gain: Float = 1.0
+
+        static let virtualMicPlayback = Options(paceRealtime: true, gain: 1.0)
     }
 
     static func streamBuffer(
@@ -29,13 +32,34 @@ enum VoxaMicRingPCMStreamer {
         }
         if let logLabel {
             print(
-                "[VoxaMic] streamBuffer \(logLabel): \(totalFrames) frames → ring paceRealtime=\(options.paceRealtime) gain=\(options.gain)"
+                "[VoxaMic] streamBuffer \(logLabel): \(totalFrames) frames → ring " +
+                    "paceRealtime=\(options.paceRealtime) gain=\(options.gain)"
             )
         }
 
         let startWriteIndex = ring.header.pointee.writeFrameIndex
         var offset = 0
         var peak: Float = 0
+
+        if options.paceRealtime {
+            let primeEnd = min(totalFrames, driverLatencyFrames)
+            if primeEnd > 0, let logLabel {
+                print("[VoxaMic] streamBuffer \(logLabel): priming \(primeEnd) frames (driver latency)")
+            }
+            offset = writeChunks(
+                from: buffer,
+                ring: ring,
+                ringFormat: ringFormat,
+                startOffset: 0,
+                endOffset: primeEnd,
+                options: options,
+                peak: &peak
+            )
+        }
+
+        var deadlineNs = monotonicNanoseconds()
+        let sampleRate = ringFormat.sampleRate
+
         while offset < totalFrames {
             let chunkFrames = min(Int(framesPerChunk), totalFrames - offset)
             guard let chunk = AVAudioPCMBuffer(pcmFormat: ringFormat, frameCapacity: AVAudioFrameCount(chunkFrames)) else {
@@ -49,15 +73,19 @@ enum VoxaMicRingPCMStreamer {
             peak = max(peak, measurePeak(chunk))
             VoxaMicRingWriter.write(pcm: chunk, to: ring, logEveryNTicks: 0, tick: 0)
             offset += chunkFrames
+
             if options.paceRealtime {
-                let chunkSeconds = Double(chunkFrames) / ringFormat.sampleRate
-                Thread.sleep(forTimeInterval: chunkSeconds)
+                let chunkNs = UInt64(Double(chunkFrames) / sampleRate * 1_000_000_000)
+                deadlineNs += chunkNs
+                sleepUntilMonotonic(deadlineNs)
             }
         }
+
         if let logLabel {
             let endWrite = ring.header.pointee.writeFrameIndex
             print(
-                "[VoxaMic] streamBuffer \(logLabel): done writeIndex \(startWriteIndex)→\(endWrite) peak=\(String(format: "%.3f", peak))"
+                "[VoxaMic] streamBuffer \(logLabel): done writeIndex \(startWriteIndex)→\(endWrite) " +
+                    "peak=\(String(format: "%.3f", peak))"
             )
         }
     }
@@ -72,6 +100,9 @@ enum VoxaMicRingPCMStreamer {
         guard totalFrames > 0 else { return }
 
         var written = 0
+        var deadlineNs = monotonicNanoseconds()
+        let sampleRate = ringFormat.sampleRate
+
         while written < totalFrames {
             let chunkFrames = min(Int(framesPerChunk), totalFrames - written)
             guard let chunk = AVAudioPCMBuffer(pcmFormat: ringFormat, frameCapacity: AVAudioFrameCount(chunkFrames)) else {
@@ -84,8 +115,58 @@ enum VoxaMicRingPCMStreamer {
             VoxaMicRingWriter.write(pcm: chunk, to: ring)
             written += chunkFrames
             if paceRealtime {
-                Thread.sleep(forTimeInterval: Double(chunkFrames) / ringFormat.sampleRate)
+                let chunkNs = UInt64(Double(chunkFrames) / sampleRate * 1_000_000_000)
+                deadlineNs += chunkNs
+                sleepUntilMonotonic(deadlineNs)
             }
+        }
+    }
+
+    private static func writeChunks(
+        from buffer: AVAudioPCMBuffer,
+        ring: VoxaMicSharedMemory,
+        ringFormat: AVAudioFormat,
+        startOffset: Int,
+        endOffset: Int,
+        options: Options,
+        peak: inout Float
+    ) -> Int {
+        var offset = startOffset
+        while offset < endOffset {
+            let chunkFrames = min(Int(framesPerChunk), endOffset - offset)
+            guard let chunk = AVAudioPCMBuffer(pcmFormat: ringFormat, frameCapacity: AVAudioFrameCount(chunkFrames)) else {
+                return offset
+            }
+            chunk.frameLength = AVAudioFrameCount(chunkFrames)
+            copyFrames(from: buffer, sourceOffset: offset, to: chunk, frameCount: chunkFrames, ringFormat: ringFormat)
+            if options.gain != 1.0 {
+                applyGain(options.gain, to: chunk)
+            }
+            peak = max(peak, measurePeak(chunk))
+            VoxaMicRingWriter.write(pcm: chunk, to: ring, logEveryNTicks: 0, tick: 0)
+            offset += chunkFrames
+        }
+        return offset
+    }
+
+    private static func monotonicNanoseconds() -> UInt64 {
+        clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
+    }
+
+    private static func sleepUntilMonotonic(_ deadlineNs: UInt64) {
+        while true {
+            let now = monotonicNanoseconds()
+            if now >= deadlineNs { return }
+            let remaining = deadlineNs - now
+            var req = timespec(
+                tv_sec: Int(remaining / 1_000_000_000),
+                tv_nsec: Int(remaining % 1_000_000_000)
+            )
+            if req.tv_nsec >= 1_000_000_000 {
+                req.tv_sec += 1
+                req.tv_nsec -= 1_000_000_000
+            }
+            nanosleep(&req, nil)
         }
     }
 
@@ -117,7 +198,8 @@ enum VoxaMicRingPCMStreamer {
     ) {
         if ringFormat.isInterleaved,
            let dst = destination.int16ChannelData?[0],
-           let src = source.int16ChannelData?[0] {
+           let src = source.int16ChannelData?[0]
+        {
             let channels = Int(ringFormat.channelCount)
             let srcChannels = max(1, Int(source.format.channelCount))
             for offset in 0..<frameCount {

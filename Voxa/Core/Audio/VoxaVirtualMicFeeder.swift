@@ -70,6 +70,10 @@ final class VoxaVirtualMicFeeder: @unchecked Sendable {
             throw VoxaVirtualMicFeederError.ringUnavailable
         }
         ringInjectionCount += 1
+        if ringInjectionCount == 1 {
+            VoxaMicRingWriter.reset(ring)
+            print("[VoxaMic] performRingInjection reset ring (sync driver read cursor)")
+        }
         syncHALWritesToRingLocked()
         let injectionIndex = ringInjectionCount
         let feederWasRunning = isRunning

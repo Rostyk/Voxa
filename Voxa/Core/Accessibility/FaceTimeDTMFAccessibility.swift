@@ -48,17 +48,34 @@ enum FaceTimeDTMFAccessibility {
             throw Error.faceTimeNotRunning
         }
 
-        try FaceTimeAccessibilityAX.activateFaceTimeCallApp()
-        let roots = try FaceTimeAccessibilityAX.buildCallUISearchRoots()
-        print(
-            "[VoxaDTMF] sendDigits sequence=\"\(digits)\" — " +
-                "AX: NotificationCenter → windows[] → hosted window → Keypad (FaceTime.app fallback)"
-        )
+        var roots = try FaceTimeAccessibilityAX.buildCallUISearchRoots()
+        let keypadAlreadyOpen = FaceTimeAccessibilityAX.isDigitKeypadVisible(roots: roots)
 
-        try await FaceTimeAccessibilityAX.ensureKeypadOpen(roots: roots)
+        if keypadAlreadyOpen {
+            // FaceTime activation dismisses the Notification Center call overlay when digits are showing.
+            FaceTimeAccessibilityAX.activateNotificationCenterForCallUI()
+            roots = try FaceTimeAccessibilityAX.buildCallUISearchRoots()
+            roots = FaceTimeAccessibilityAX.rootsForActiveKeypad(roots)
+            print("[VoxaDTMF] digit pad already open — focus Notification Center, skip Keypad")
+        } else {
+            try FaceTimeAccessibilityAX.activateFaceTimeCallApp()
+            roots = try FaceTimeAccessibilityAX.buildCallUISearchRoots()
+            print(
+                "[VoxaDTMF] sendDigits sequence=\"\(digits)\" — " +
+                    "AX: NotificationCenter → Keypad → digits"
+            )
+            try await FaceTimeAccessibilityAX.ensureKeypadOpen(roots: roots)
+            roots = try FaceTimeAccessibilityAX.buildCallUISearchRoots()
+            roots = FaceTimeAccessibilityAX.rootsForActiveKeypad(roots)
+        }
 
         for digit in digits {
-            try FaceTimeAccessibilityAX.pressDigit(digit, roots: roots)
+            // Fresh tree + focus before each tone (AX elements go stale after the first press).
+            FaceTimeAccessibilityAX.activateNotificationCenterForCallUI()
+            let pressRoots = FaceTimeAccessibilityAX.rootsForActiveKeypad(
+                try FaceTimeAccessibilityAX.buildCallUISearchRoots()
+            )
+            try FaceTimeAccessibilityAX.pressDigit(digit, roots: pressRoots)
             try await Task.sleep(for: digitTapDelay)
         }
 

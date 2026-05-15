@@ -15,7 +15,7 @@ enum VoxaVirtualMicSpeechError: LocalizedError {
     }
 }
 
-/// Speaks text into the virtual microphone (one-shot TTS, same ring path as DTMF).
+/// Speaks text into the virtual microphone — **single path** for every play/text call-goal action.
 final class VoxaVirtualMicSpeech: @unchecked Sendable {
     static let shared = VoxaVirtualMicSpeech()
 
@@ -25,14 +25,22 @@ final class VoxaVirtualMicSpeech: @unchecked Sendable {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw VoxaVirtualMicSpeechError.emptyText }
 
-        VoxaVirtualMicFeeder.shared.startIfNeeded()
-        let buffer = try synthesizeToRingBuffer(text: trimmed, localeIdentifier: localeIdentifier)
-        try await VoxaVirtualMicFeeder.shared.performRingInjection { ring in
-            try VoxaMicRingPCMStreamer.streamBuffer(buffer, to: ring)
+        let locale = localeIdentifier ?? ""
+        try await VoxaVirtualMicPlaybackExecutor.run {
+            VoxaVirtualMicFeeder.shared.startIfNeeded()
+            let buffer = try self.synthesizeToRingBuffer(text: trimmed, localeIdentifier: locale)
+            try await VoxaVirtualMicFeeder.shared.performRingInjection { ring in
+                try VoxaMicRingPCMStreamer.streamBuffer(
+                    buffer,
+                    to: ring,
+                    logLabel: "tts",
+                    options: .virtualMicPlayback
+                )
+            }
         }
     }
 
-    private func synthesizeToRingBuffer(text: String, localeIdentifier: String?) throws -> AVAudioPCMBuffer {
+    private func synthesizeToRingBuffer(text: String, localeIdentifier: String) throws -> AVAudioPCMBuffer {
         guard let ringFormat = VoxaMicPCMFileLoader.ringFormat else {
             throw VoxaMicPCMFileLoader.Error.ringFormatUnavailable
         }
@@ -41,13 +49,13 @@ final class VoxaVirtualMicSpeech: @unchecked Sendable {
             .appendingPathComponent("voxa-tts-\(UUID().uuidString).aiff")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
+        let sayVoice = VoxaSayVoiceResolver.voiceArgument(forLocaleIdentifier: localeIdentifier)
+        let args = ["-v", sayVoice, "-o", tmp.path, text]
+
+        print("[VoxaMic] TTS say \(args.prefix(4).joined(separator: " ")) … chars=\(text.count)")
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-        var args = ["-o", tmp.path]
-        if let localeIdentifier, !localeIdentifier.isEmpty {
-            args.insert(contentsOf: ["-v", voiceName(for: localeIdentifier)], at: 0)
-        }
-        args.append(text)
         process.arguments = args
 
         do {
@@ -61,13 +69,15 @@ final class VoxaVirtualMicSpeech: @unchecked Sendable {
             throw VoxaVirtualMicSpeechError.synthesisFailed("say exited \(process.terminationStatus)")
         }
 
-        return try VoxaMicPCMFileLoader.loadAndConvert(url: tmp, targetFormat: ringFormat)
-    }
-
-    private func voiceName(for localeIdentifier: String) -> String {
-        if let voice = AVSpeechSynthesisVoice(language: localeIdentifier) {
-            return voice.name
+        if let file = try? AVAudioFile(forReading: tmp) {
+            let seconds = Double(file.length) / file.processingFormat.sampleRate
+            print(
+                "[VoxaMic] TTS say output \(tmp.lastPathComponent): " +
+                    "\(Int(file.processingFormat.sampleRate)) Hz \(file.processingFormat.channelCount)ch " +
+                    "≈\(String(format: "%.0f", seconds * 1000))ms voice=\(sayVoice)"
+            )
         }
-        return localeIdentifier
+
+        return try VoxaMicPCMFileLoader.loadAndConvert(url: tmp, targetFormat: ringFormat)
     }
 }

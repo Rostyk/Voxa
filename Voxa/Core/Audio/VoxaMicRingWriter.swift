@@ -6,6 +6,7 @@ enum VoxaMicRingWriter {
     static func reset(_ ring: VoxaMicSharedMemory) {
         ring.header.pointee.writeFrameIndex = 0
         memset(ring.samplePointer(), 0, VoxaMicRingLayout.sampleBytes)
+        OSMemoryBarrier()
     }
 
     static func write(pcm: AVAudioPCMBuffer, to ring: VoxaMicSharedMemory, logEveryNTicks: UInt64 = 0, tick: UInt64 = 0) {

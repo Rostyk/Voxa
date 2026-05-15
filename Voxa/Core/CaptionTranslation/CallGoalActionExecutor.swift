@@ -10,7 +10,7 @@ enum CallGoalActionExecutor {
         )
         print("[CallGoal] perform locale=\(speechLocaleIdentifier)")
 
-        Task.detached(priority: .userInitiated) {
+        Task {
             await MainActor.run {
                 VoxaVirtualMicFeederStatus.shared.clearLastActionError()
             }
@@ -21,7 +21,10 @@ enum CallGoalActionExecutor {
                     try await performDTMF(normalized.content)
                     print("[CallGoal] perform dtmf SUCCESS")
                 case .text:
-                    print("[CallGoal] perform text → VoxaVirtualMicSpeech.speak chars=\(normalized.content.count)")
+                    print(
+                        "[CallGoal] perform text → VoxaVirtualMicSpeech.speak " +
+                            "locale=\(speechLocaleIdentifier) chars=\(normalized.content.count)"
+                    )
                     try await VoxaVirtualMicSpeech.shared.speak(
                         normalized.content,
                         localeIdentifier: speechLocaleIdentifier

@@ -26,13 +26,33 @@ enum FaceTimeAccessibilityAX {
     private static let logSurveyMaxNodes = 250
     private static let logSurveyMaxDepth = 12
 
-    /// Keeps the call in FaceTime; UI is driven via Notification Center’s AX tree.
+    /// Use when the digit pad is already open (keeps Notification Center call overlay focused).
+    static func activateNotificationCenterForCallUI() {
+        guard let app = NSRunningApplication.runningApplications(
+            withBundleIdentifier: notificationCenterBundleID
+        ).first else {
+            return
+        }
+        print("[VoxaDTMF] activate Notification Center pid=\(app.processIdentifier) (keep call overlay)")
+        _ = app.activate(options: [.activateIgnoringOtherApps])
+    }
+
+    /// Use when the call overlay is not visible yet.
     static func activateFaceTimeCallApp() throws {
         guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: faceTimeBundleID).first else {
             throw FaceTimeDTMFAccessibility.Error.faceTimeNotRunning
         }
         print("[VoxaDTMF] activate FaceTime pid=\(app.processIdentifier)")
         _ = app.activate(options: [.activateIgnoringOtherApps])
+    }
+
+    /// Prefer Notification Center roots when the digit pad is already on screen.
+    static func rootsForActiveKeypad(_ roots: [SearchRoot]) -> [SearchRoot] {
+        let notificationCenterRoots = roots.filter { $0.label.hasPrefix("NotificationCenter") }
+        if isDigitKeypadVisible(roots: notificationCenterRoots) {
+            return notificationCenterRoots
+        }
+        return roots
     }
 
     /// Notification Center hosts the in-call overlay (`NotificationCenterWindow` → hosted window → Keypad).
@@ -254,20 +274,23 @@ enum FaceTimeAccessibilityAX {
 
     private static func findDigitButton(digit: Character, under root: AXUIElement) -> AXUIElement? {
         var queue: [(element: AXUIElement, depth: Int)] = [(root, 0)]
+        var matches: [(element: AXUIElement, depth: Int)] = []
 
         while !queue.isEmpty {
             let (element, depth) = queue.removeFirst()
             if depth > maxSearchDepth { continue }
 
-            if isPressable(element), buttonMatchesDigit(element, digit: digit) {
-                return element
+            if isPressable(element), buttonMatchesDigit(element, digit: digit), isAXEnabled(element) {
+                matches.append((element, depth))
             }
 
             for child in children(of: element) {
                 queue.append((child, depth + 1))
             }
         }
-        return nil
+
+        // Prefer the deepest leaf-like match (avoids stale shallow containers).
+        return matches.max(by: { $0.depth < $1.depth })?.element
     }
 
     // MARK: - Matching
@@ -405,6 +428,18 @@ enum FaceTimeAccessibilityAX {
             }
         }
         return nil
+    }
+
+    private static func isAXEnabled(_ element: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXEnabledAttribute as CFString, &value) == .success,
+              let value
+        else {
+            return true
+        }
+        if let enabled = value as? Bool { return enabled }
+        if let number = value as? NSNumber { return number.boolValue }
+        return true
     }
 
     private static func hasAction(_ element: AXUIElement, named actionName: String) -> Bool {

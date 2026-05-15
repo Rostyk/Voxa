@@ -26,6 +26,11 @@ struct ContentView: View {
 
             if micGranted && systemAudioGranted {
                 virtualMicStatusCard
+
+                CallGoalActionHardcodedTestButton(
+                    speechLocaleIdentifier: conversationViewModel.speechLocaleIdentifier
+                )
+
                 callStatusCard
 
                 ConversationCaptionSettingsView(model: conversationViewModel)

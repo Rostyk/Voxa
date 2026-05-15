@@ -46,9 +46,13 @@ struct CallGoalActionsView: View {
                 print("[UI] tap TEXT button chars=\(action.content.count) preview=\"\(String(action.content.prefix(48)))\"")
                 CallGoalActionExecutor.perform(action, speechLocaleIdentifier: speechLocaleIdentifier)
             } label: {
-                Text(action.content)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                Label {
+                    Text(action.content)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                } icon: {
+                    Image(systemName: "play.fill")
+                }
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
@@ -67,8 +71,8 @@ struct CallGoalActionsView: View {
                 }
             } label: {
                 Label(
-                    muted ? "Speak (unmute)" : "Speaking",
-                    systemImage: muted ? "mic.slash.fill" : "mic.fill"
+                    muted ? "Speak" : "Speaking",
+                    systemImage: "mic.fill"
                 )
             }
             .buttonStyle(.borderedProminent)
@@ -94,7 +98,27 @@ struct CallGoalActionsView: View {
                 accessibility.requestGrant()
             }
         } label: {
-            Label(labelText, systemImage: granted ? "circle.grid.3x3.fill" : "lock.fill")
+            Group {
+                if granted {
+                    Label(labelText, systemImage: "circle.grid.3x3.fill")
+                } else {
+                    Text(labelText)
+                        .font(.body.weight(.semibold))
+                        .frame(minWidth: 20)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if !granted {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .padding(2)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .offset(x: 6, y: -6)
+                }
+            }
+            .padding(.top, granted ? 0 : 4)
+            .padding(.trailing, granted ? 0 : 4)
         }
         .buttonStyle(.bordered)
         .controlSize(.regular)
