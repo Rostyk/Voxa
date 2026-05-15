@@ -10,6 +10,8 @@ struct ConversationTurn: Identifiable, Hashable, Sendable {
     let gptCorrected: String?
     /// GPT translation at commit time (or filled in shortly after if the request finished late).
     let gptTranslation: String?
+    /// Suggested next steps toward the call goal (ChatGPT path only).
+    let gptActions: [CallGoalAction]
     let createdAt: Date
 
     init(
@@ -18,6 +20,7 @@ struct ConversationTurn: Identifiable, Hashable, Sendable {
         text: String,
         gptCorrected: String? = nil,
         gptTranslation: String? = nil,
+        gptActions: [CallGoalAction] = [],
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -25,6 +28,7 @@ struct ConversationTurn: Identifiable, Hashable, Sendable {
         self.text = text
         self.gptCorrected = gptCorrected
         self.gptTranslation = gptTranslation
+        self.gptActions = gptActions
         self.createdAt = createdAt
     }
 }
@@ -39,7 +43,7 @@ struct ConversationState: Sendable {
     /// No partial updates and low energy for a short window (derived in view model).
     var isSilent: Bool
     var speechAuthorized: Bool
-    /// `Locale.identifier` for `SFSpeechRecognizer` (defaults to Mac locale in `ConversationViewModel.init`).
+    /// `Locale.identifier` for `SFSpeechRecognizer` (defaults to Spanish in `SpeechRecognitionLocaleCatalog`).
     var speechLocaleIdentifier: String
     var lastError: String?
 
@@ -49,7 +53,7 @@ struct ConversationState: Sendable {
         isSpeakerSpeaking: false,
         isSilent: true,
         speechAuthorized: false,
-        speechLocaleIdentifier: Locale.current.identifier,
+        speechLocaleIdentifier: SpeechRecognitionLocaleCatalog.defaultSpeechLocaleIdentifier,
         lastError: nil
     )
 }

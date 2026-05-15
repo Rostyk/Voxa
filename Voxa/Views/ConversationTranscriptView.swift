@@ -2,16 +2,34 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// Transcript UI: **Observation-split** so `CaptionTranslationViewModel` mutations do not invalidate the
-/// same SwiftUI subtree as live STT (`ConversationViewModel.state`). Settings still bind to caption pickers.
+/// Speech / translation pickers and **Set goal** — shown before a call starts (no recording required).
+struct ConversationCaptionSettingsView: View {
+    let model: ConversationViewModel
+    @State private var showCallGoalSheet = false
+
+    var body: some View {
+        CaptionSettingsSection(model: model, showCallGoalSheet: $showCallGoalSheet)
+    }
+}
+
+/// Live transcript list — only meaningful while system-audio capture is running.
+struct ConversationTranscriptScrollView: View {
+    let model: ConversationViewModel
+
+    var body: some View {
+        TranscriptScrollCard(model: model)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// Full column: settings + transcript (used when both are visible).
 struct ConversationTranscriptView: View {
     let model: ConversationViewModel
-    @State private var showCallContextSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            CaptionSettingsSection(model: model, showCallContextSheet: $showCallContextSheet)
-            TranscriptScrollCard(model: model)
+            ConversationCaptionSettingsView(model: model)
+            ConversationTranscriptScrollView(model: model)
                 .layoutPriority(1)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -22,7 +40,7 @@ struct ConversationTranscriptView: View {
 
 private struct CaptionSettingsSection: View {
     @Bindable var model: ConversationViewModel
-    @Binding var showCallContextSheet: Bool
+    @Binding var showCallGoalSheet: Bool
 
     private var state: ConversationState { model.state }
 
@@ -35,8 +53,8 @@ private struct CaptionSettingsSection: View {
             translationLocale: $caption.translationLocaleIdentifier,
             translationLastError: caption.translationLastError
         )
-        .sheet(isPresented: $showCallContextSheet) {
-            callContextEditorSheet(isPresented: $showCallContextSheet, notes: $caption.callContextNotes)
+        .sheet(isPresented: $showCallGoalSheet) {
+            callGoalEditorSheet(isPresented: $showCallGoalSheet, goal: $caption.callGoal)
         }
     }
 
@@ -106,7 +124,7 @@ private struct CaptionSettingsSection: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("Translation target language")
 
-                    callContextButton
+                    callGoalButton
 
                     Spacer(minLength: 0)
                 }
@@ -130,29 +148,29 @@ private struct CaptionSettingsSection: View {
         .transcriptPanelChrome()
     }
 
-    private var callContextButton: some View {
+    private var callGoalButton: some View {
         Button {
-            showCallContextSheet = true
+            showCallGoalSheet = true
         } label: {
-            Label("Call context", systemImage: "text.badge.plus")
+            Label("Set goal", systemImage: "target")
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
-        .help("Optional notes about this call — used in the ChatGPT translation prompt only (Google Translate ignores this).")
+        .help("What you want to achieve on this call — ChatGPT uses this for translation + suggested actions.")
     }
 
     private func menuTitle(for identifier: String) -> String {
         Locale.current.localizedString(forIdentifier: identifier) ?? identifier
     }
 
-    private func callContextEditorSheet(isPresented: Binding<Bool>, notes: Binding<String>) -> some View {
+    private func callGoalEditorSheet(isPresented: Binding<Bool>, goal: Binding<String>) -> some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 10) {
-                Text("This text is sent to GPT as call context (topic, names, product jargon). It is not shown in the transcript.")
+                Text("Describe the goal of this call. ChatGPT will translate each callee line and suggest actions (DTMF, phrases to say, or when you should speak).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                TextEditor(text: notes)
+                TextEditor(text: goal)
                     .font(.body)
                     .frame(minHeight: 160)
                     .padding(8)
@@ -160,10 +178,14 @@ private struct CaptionSettingsSection: View {
             }
             .padding(16)
             .frame(minWidth: 400, minHeight: 260)
-            .navigationTitle("Call context")
+            .navigationTitle("Set goal")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Apply") { isPresented.wrappedValue = false }
+                    Button("Apply") {
+                        let trimmed = goal.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                        print("[CallGoal] call goal saved chars=\(trimmed.count) preview=\"\(String(trimmed.prefix(80)))\"")
+                        isPresented.wrappedValue = false
+                    }
                 }
             }
         }
@@ -191,7 +213,7 @@ private struct TranscriptScrollCard: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(state.history) { turn in
-                            committedTurnBubble(turn: turn)
+                            committedTurnBubble(turn: turn, speechLocaleIdentifier: state.speechLocaleIdentifier)
                                 .id(turn.id)
                         }
                         if !state.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -239,7 +261,7 @@ private struct TranscriptScrollCard: View {
         .background(Capsule().fill(Color.primary.opacity(0.05)))
     }
 
-    private func committedTurnBubble(turn: ConversationTurn) -> some View {
+    private func committedTurnBubble(turn: ConversationTurn, speechLocaleIdentifier: String) -> some View {
         let corrected = turn.gptCorrected?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let sourceLine = corrected.isEmpty ? turn.text : corrected
         let translation = turn.gptTranslation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -261,6 +283,11 @@ private struct TranscriptScrollCard: View {
                     .foregroundStyle(.primary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                CallGoalActionsView(
+                    actions: turn.gptActions,
+                    speechLocaleIdentifier: speechLocaleIdentifier
+                )
             }
         }
         .padding(12)

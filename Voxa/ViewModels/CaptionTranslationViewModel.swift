@@ -7,8 +7,8 @@ import Observation
 @Observable
 final class CaptionTranslationViewModel {
 
-    /// Free-form notes about the call (topic, participants, jargon) — used by the **ChatGPT** path only.
-    var callContextNotes: String = ""
+    /// What the caller wants to achieve on this call — used by the **ChatGPT** path only.
+    var callGoal: String = ""
 
     /// Target locale for translation (same identifier pool as speech recognition).
     var translationLocaleIdentifier: String {
@@ -16,7 +16,7 @@ final class CaptionTranslationViewModel {
         set { applyTranslationLocaleIdentifier(newValue) }
     }
 
-    /// Default is **Google Translate**; switch to **ChatGPT** for correction + translation in one model call.
+    /// Default is **ChatGPT** (correction + translation + call-goal actions in one call).
     var translationEngine: LiveCaptionTranslationEngine {
         get { _translationEngine }
         set {
@@ -33,7 +33,7 @@ final class CaptionTranslationViewModel {
     var translationLastError: String?
 
     @ObservationIgnored private var _translationLocaleIdentifier: String
-    @ObservationIgnored private var _translationEngine: LiveCaptionTranslationEngine = .googleTranslate
+    @ObservationIgnored private var _translationEngine: LiveCaptionTranslationEngine = .gpt
 
     @ObservationIgnored private let gptCaptionService: GPTCaptionTranslationService?
     @ObservationIgnored private let googleCaptionService: GoogleTranslateCaptionService?
@@ -43,7 +43,9 @@ final class CaptionTranslationViewModel {
     @ObservationIgnored private var translationSessionGeneration: UInt64 = 0
     @ObservationIgnored private var commitTranslationInFlightCount: Int = 0
 
-    var onSupersededTranslation: ((_ turnID: UUID, _ transcript: String, _ corrected: String, _ translation: String) -> Void)?
+    var onSupersededTranslation: (
+        (_ turnID: UUID, _ transcript: String, _ corrected: String, _ translation: String, _ actions: [CallGoalAction]) -> Void
+    )?
 
     init() {
         print("[Caption] CaptionTranslationViewModel init engine=\(_translationEngine.rawValue) (translate on segment commit only)")
@@ -199,7 +201,8 @@ final class CaptionTranslationViewModel {
         )
 
         if translationEngine == .gpt {
-            print("[GPT] invoking chat/completions commit id=\(requestID)")
+            let goalPreview = Self.logPreview(callGoal, maxLen: 120)
+            print("[GPT] invoking chat/completions commit id=\(requestID) callGoalChars=\(callGoal.count) goalPreview=\(goalPreview)")
         }
 
         let wallStart = CFAbsoluteTimeGetCurrent()
@@ -207,7 +210,7 @@ final class CaptionTranslationViewModel {
             let payload = try await service.translateLine(
                 transcript: text,
                 targetLocaleIdentifier: translationLocaleIdentifier,
-                callContextNotes: callContextNotes
+                callContextNotes: callGoal
             )
             let wall = CFAbsoluteTimeGetCurrent() - wallStart
 
@@ -228,9 +231,10 @@ final class CaptionTranslationViewModel {
             }
 
             print(
-                "[Caption] translate commit delivering merge turn=\(turnID) correctedChars=\(payload.corrected.count) translationChars=\(payload.translation.count)"
+                "[Caption] translate commit delivering merge turn=\(turnID) correctedChars=\(payload.corrected.count) translationChars=\(payload.translation.count) actions=\(payload.actions.count)"
             )
-            onSupersededTranslation?(turnID, text, payload.corrected, payload.translation)
+            CallGoalActionLog.logList(payload.actions, context: "delivering to ConversationViewModel turn=\(turnID)")
+            onSupersededTranslation?(turnID, text, payload.corrected, payload.translation, payload.actions)
             if requestID == latestRequestID {
                 translationLastError = nil
             }

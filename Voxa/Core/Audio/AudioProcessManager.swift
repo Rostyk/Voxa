@@ -96,7 +96,7 @@ final class AudioProcessManager {
         }
 
         guard let sdkDetector else { return }
-        sdkDetector.scan(onlyWithMicrophoneInput: true) { [weak self] micSDKProcesses, _ in
+        sdkDetector.scan(onlyWithMicrophoneInput: true) { [weak self] micSDKProcesses, error in
             guard let self else { return }
             let mappedMic = micSDKProcesses.map(self.mapProcess)
             let previousMicProcesses = self.activeMicrophoneProcesses
@@ -105,13 +105,33 @@ final class AudioProcessManager {
             self.activeMicrophoneProcesses = mappedMic
             self.foregroundProcess = newForegroundProcess
 
+            Self.logMicProcessList(mappedMic, sdkError: error)
+
             if previousMicProcesses != mappedMic {
+                print("[AudioProcessManager] mic list changed (\(previousMicProcesses.count) -> \(mappedMic.count)), posting notification")
                 NotificationCenter.default.post(
                     name: .microphoneProcessesChanged,
                     object: self,
                     userInfo: ["processes": mappedMic]
                 )
+            } else {
+                print("[AudioProcessManager] mic list unchanged (\(mappedMic.count)), no notification")
             }
+        }
+    }
+
+    private static func logMicProcessList(_ processes: [AudioProcess], sdkError: VOAudioError?) {
+        if let sdkError {
+            print("[AudioProcessManager] mic scan SDK error: \(sdkError)")
+        }
+        if processes.isEmpty {
+            print("[AudioProcessManager] activeMicrophoneProcesses: (empty)")
+            return
+        }
+        print("[AudioProcessManager] activeMicrophoneProcesses (\(processes.count)):")
+        for process in processes {
+            let bundle = process.bundleID ?? "—"
+            print("[AudioProcessManager]   pid=\(process.id) name=\"\(process.name)\" bundle=\(bundle) audioActive=\(process.audioActive)")
         }
     }
 

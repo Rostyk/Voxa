@@ -12,6 +12,15 @@ final class VoxaMicHALCapture: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.aurigin.test.Voxa.VoxaMicHALCapture", qos: .userInitiated)
     private var isCapturing = false
     private var tapCount: UInt64 = 0
+    private let writeLock = NSLock()
+    /// When `false`, HAL still captures (mic stays active) but PCM is not written to the virtual-mic ring.
+    private var writesToRing = true
+
+    func setWritesToRing(_ enabled: Bool) {
+        writeLock.lock()
+        writesToRing = enabled
+        writeLock.unlock()
+    }
 
     func start(captureDeviceID: AudioDeviceID, ring: VoxaMicSharedMemory) throws {
         try queue.sync {
@@ -29,6 +38,7 @@ final class VoxaMicHALCapture: @unchecked Sendable {
         stopOnQueue()
         self.ring = ring
         tapCount = 0
+        setWritesToRing(true)
 
         guard var streamDescription = Self.deviceStreamDescription(deviceID: captureDeviceID) else {
             throw CaptureError.noStreamFormat
@@ -152,13 +162,15 @@ final class VoxaMicHALCapture: @unchecked Sendable {
         guard let pcm = Self.makePCMBuffer(from: &bufferList, format: format, frameCount: frameCount) else {
             return noErr
         }
-        tapCount += 1
         writeToRing(pcm: pcm)
         return noErr
     }
 
     private func writeToRing(pcm: AVAudioPCMBuffer) {
-        guard let ring else { return }
+        writeLock.lock()
+        let shouldWrite = writesToRing
+        writeLock.unlock()
+        guard shouldWrite, let ring else { return }
         tapCount += 1
         VoxaMicRingWriter.write(pcm: pcm, to: ring, logEveryNTicks: 200, tick: tapCount)
     }

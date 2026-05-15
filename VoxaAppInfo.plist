@@ -6,5 +6,7 @@
 	<string>Voxa captures system audio output to show levels while a supported call app is using the microphone.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Voxa transcribes call audio on device so you can read the conversation as it happens.</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Voxa uses Accessibility to press FaceTime keypad buttons when you send DTMF tones during a call.</string>
 </dict>
 </plist>

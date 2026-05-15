@@ -21,12 +21,12 @@ final class GPTCaptionTranslationService: LiveCaptionTranslationServicing, @unch
         let chatRequest = CaptionTranslationPrompt.chatRequest(
             model: OpenAIConfiguration.chatCaptionModel(),
             rawTranscript: transcript,
-            callContext: callContextNotes,
+            callGoal: callContextNotes,
             targetLanguageLabel: targetLabel
         )
 
         print(
-            "[GPT] live_call_transcription request model=\(chatRequest.model) target=\"\(targetLabel)\" contextChars=\(callContextNotes.count) transcriptChars=\(transcript.count)"
+            "[GPT] live_call_transcription request model=\(chatRequest.model) target=\"\(targetLabel)\" goalChars=\(callContextNotes.count) transcriptChars=\(transcript.count)"
         )
         print("[GPT] GPTCaptionTranslationService messages=\(chatRequest.messages.count)")
         for (index, message) in chatRequest.messages.enumerated() {

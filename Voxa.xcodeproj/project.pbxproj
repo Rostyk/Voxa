@@ -407,6 +407,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = VoxaAppInfo.plist;
+				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Voxa uses Accessibility to press FaceTime keypad buttons when you send DTMF tones during a call.";
 				INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Voxa captures system audio output to show levels while a supported call app is using the microphone.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Voxa uses the microphone permission together with system audio capture to detect when call apps are active and visualize audio.";
@@ -443,6 +444,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = VoxaAppInfo.plist;
+				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Voxa uses Accessibility to press FaceTime keypad buttons when you send DTMF tones during a call.";
 				INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Voxa captures system audio output to show levels while a supported call app is using the microphone.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Voxa uses the microphone permission together with system audio capture to detect when call apps are active and visualize audio.";

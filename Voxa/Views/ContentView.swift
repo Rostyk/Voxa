@@ -28,6 +28,8 @@ struct ContentView: View {
                 virtualMicStatusCard
                 callStatusCard
 
+                ConversationCaptionSettingsView(model: conversationViewModel)
+
                 if let recorder = callViewModel.recorder, callViewModel.isRecording {
                     AudioVisualizationView(
                         barCount: 100,
@@ -41,9 +43,15 @@ struct ContentView: View {
                     .frame(height: 60)
                     .frame(maxWidth: .infinity)
 
-                    ConversationTranscriptView(model: conversationViewModel)
+                    ConversationTranscriptScrollView(model: conversationViewModel)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 } else {
+                    Text("Live transcript appears when a call app (Meet, FaceTime, …) is detected.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
                     Spacer(minLength: 0)
                 }
             } else {
@@ -103,7 +111,7 @@ struct ContentView: View {
             return "Starts automatically after microphone access is granted."
         }()
 
-        return HStack(alignment: .top, spacing: 14) {
+        return HStack(alignment: .center, spacing: 14) {
             ZStack {
                 Circle()
                     .fill(tint.opacity(0.15))
@@ -125,6 +133,33 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            if status.muteToggleAvailable {
+                Button {
+                    let willMute = !status.isOutputMuted
+                    print("[UI] tap VirtualMic Mute button wasMuted=\(status.isOutputMuted) willMute=\(willMute)")
+                    VoxaVirtualMicFeeder.shared.setOutputMuted(willMute)
+                } label: {
+                    Label(
+                        status.isOutputMuted ? "Unmute" : "Mute",
+                        systemImage: status.isOutputMuted ? "mic.slash.fill" : "mic.fill"
+                    )
+                    .font(.body.weight(.semibold))
+                    .labelStyle(.titleAndIcon)
+                    .frame(minWidth: 96, minHeight: 48)
+                    .padding(.horizontal, 18)
+                    .background {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(nsColor: .controlBackgroundColor))
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.14), lineWidth: 1)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help(status.isOutputMuted ? "Send your voice to the virtual mic" : "Mute your voice on the virtual mic")
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)

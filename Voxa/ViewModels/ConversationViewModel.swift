@@ -28,7 +28,7 @@ final class ConversationViewModel {
     }
 
     init() {
-        let localeId = Self.resolvedSpeechLocaleIdentifier(Locale.current.identifier)
+        let localeId = SpeechRecognitionLocaleCatalog.defaultSpeechLocaleIdentifier
         state = ConversationState(
             history: [],
             liveTranscript: "",
@@ -39,12 +39,13 @@ final class ConversationViewModel {
             lastError: nil
         )
         speechUI.attach(host: self)
-        captionTranslation.onSupersededTranslation = { [weak self] turnID, transcript, corrected, translation in
+        captionTranslation.onSupersededTranslation = { [weak self] turnID, transcript, corrected, translation, actions in
             self?.mergeSupersededCaptionIntoTurnIfNeeded(
                 turnID: turnID,
                 transcript: transcript,
                 corrected: corrected,
-                translation: translation
+                translation: translation,
+                actions: actions
             )
         }
     }
@@ -175,7 +176,8 @@ final class ConversationViewModel {
         turnID: UUID,
         transcript: String,
         corrected: String,
-        translation: String
+        translation: String,
+        actions: [CallGoalAction]
     ) {
         guard let idx = state.history.firstIndex(where: { $0.id == turnID }) else {
             print("[ConversationViewModel] mergeCaption skipped — no history row for turnID=\(turnID)")
@@ -198,7 +200,17 @@ final class ConversationViewModel {
         let newTranslation = translation.trimmingCharacters(in: .whitespacesAndNewlines)
         let mergedCorrected: String? = newCorrected.isEmpty ? row.gptCorrected : newCorrected
         let mergedTranslation: String? = newTranslation.isEmpty ? row.gptTranslation : newTranslation
-        guard mergedCorrected != row.gptCorrected || mergedTranslation != row.gptTranslation else { return }
+        let mergedActions = actions.isEmpty ? row.gptActions : actions
+        if !actions.isEmpty {
+            CallGoalActionLog.logList(actions, context: "mergeCaption incoming turnID=\(turnID)")
+        }
+        if mergedActions != row.gptActions {
+            CallGoalActionLog.logList(mergedActions, context: "mergeCaption stored on history[\(idx)] (was \(row.gptActions.count))")
+        }
+        guard mergedCorrected != row.gptCorrected || mergedTranslation != row.gptTranslation || mergedActions != row.gptActions else {
+            print("[CallGoal] mergeCaption skipped — no changes for turnID=\(turnID)")
+            return
+        }
         var s = state
         s.history[idx] = ConversationTurn(
             id: row.id,
@@ -206,11 +218,12 @@ final class ConversationViewModel {
             text: row.text,
             gptCorrected: mergedCorrected,
             gptTranslation: mergedTranslation,
+            gptActions: mergedActions,
             createdAt: row.createdAt
         )
         state = s
         print(
-            "[ConversationViewModel] mergeCaptionIntoTurn turnID=\(turnID) rowIndex=\(idx) transcriptChars=\(transcript.count) hadTranslation=\(row.gptTranslation != nil)"
+            "[ConversationViewModel] mergeCaptionIntoTurn turnID=\(turnID) rowIndex=\(idx) transcriptChars=\(transcript.count) hadTranslation=\(row.gptTranslation != nil) actions=\(mergedActions.count)"
         )
     }
 

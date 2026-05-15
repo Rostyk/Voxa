@@ -10,15 +10,32 @@ final class VoxaVirtualMicFeeder: @unchecked Sendable {
     private let log = Logger(subsystem: "com.aurigin.test.Voxa", category: "VoxaVirtualMic")
     private let stateLock = NSLock()
     private var halCapture: VoxaMicHALCapture?
-    private var wavFeeder: VoxaMicWAVFileFeeder?
+    private var ring: VoxaMicSharedMemory?
+    private var liveCaptureDeviceName: String?
     private var isRunning = false
+    private var ringInjectionCount = 0
+    private var lastLoggedHALWritesToRing: Bool?
+    /// When `true`, HAL capture runs but does not write to the ring (user muted the virtual-mic output).
+    private(set) var isOutputMuted = false
 
     private init() {}
+
+    /// Mute/unmute live voice to the virtual mic. Default at call start: **unmuted** (`false`).
+    func setOutputMuted(_ muted: Bool) {
+        stateLock.lock()
+        let was = isOutputMuted
+        isOutputMuted = muted
+        syncHALWritesToRingLocked()
+        stateLock.unlock()
+        print("[VoxaMic] setOutputMuted \(was) → \(muted) feederRunning=\(isRunning)")
+        publishOutputMuteState()
+    }
 
     func startIfNeeded() {
         stateLock.lock()
         defer { stateLock.unlock() }
         guard !isRunning else { return }
+        isOutputMuted = false
         tryStartLocked()
     }
 
@@ -26,6 +43,7 @@ final class VoxaVirtualMicFeeder: @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         if isRunning { stopLocked() }
+        isOutputMuted = false
         tryStartLocked()
     }
 
@@ -35,6 +53,78 @@ final class VoxaVirtualMicFeeder: @unchecked Sendable {
         stopLocked()
     }
 
+    /// Pauses HAL→ring while `body` runs (e.g. TTS), then restores prior mute state.
+    func performRingInjection(_ body: @escaping (VoxaMicSharedMemory) async throws -> Void) async throws {
+        stateLock.lock()
+        if !isRunning {
+            print("[VoxaMic] performRingInjection: ring-only (HAL not started — TTS without mic capture)")
+            guard ensureRingMappedLocked(resetIfNew: false) != nil else {
+                stateLock.unlock()
+                print("[VoxaMic] performRingInjection FAILED — could not open ring at \(VoxaMicRingLayout.ringPath)")
+                throw VoxaVirtualMicFeederError.ringUnavailable
+            }
+        }
+        guard let ring else {
+            stateLock.unlock()
+            print("[VoxaMic] performRingInjection FAILED — ring unavailable isRunning=\(isRunning)")
+            throw VoxaVirtualMicFeederError.ringUnavailable
+        }
+        ringInjectionCount += 1
+        syncHALWritesToRingLocked()
+        let injectionIndex = ringInjectionCount
+        let feederWasRunning = isRunning
+        let writeIndexBefore = ring.header.pointee.writeFrameIndex
+        stateLock.unlock()
+
+        print(
+            "[VoxaMic] performRingInjection START #\(injectionIndex) ringPath=\(VoxaMicRingLayout.ringPath) writeIndex=\(writeIndexBefore) feederRunning=\(feederWasRunning)"
+        )
+
+        defer {
+            stateLock.lock()
+            ringInjectionCount = max(0, ringInjectionCount - 1)
+            syncHALWritesToRingLocked()
+            let writeIndexAfter = ring.header.pointee.writeFrameIndex
+            let remaining = ringInjectionCount
+            stateLock.unlock()
+            print(
+                "[VoxaMic] performRingInjection END #\(injectionIndex) remainingInjections=\(remaining) writeIndex=\(writeIndexAfter)"
+            )
+        }
+
+        do {
+            try await body(ring)
+            print("[VoxaMic] performRingInjection body completed OK #\(injectionIndex)")
+        } catch {
+            print("[VoxaMic] performRingInjection body FAILED #\(injectionIndex): \(error)")
+            throw error
+        }
+    }
+
+    @discardableResult
+    private func ensureRingMappedLocked(resetIfNew: Bool) -> VoxaMicSharedMemory? {
+        if let ring { return ring }
+        guard let ring = VoxaMicSharedMemory() else {
+            print("[VoxaMic] Failed to open ring file \(VoxaMicRingLayout.ringPath)")
+            return nil
+        }
+        self.ring = ring
+        if resetIfNew {
+            VoxaMicRingWriter.reset(ring)
+            print("[VoxaMic] Ring reset for new capture session")
+        }
+        return ring
+    }
+
+    private func syncHALWritesToRingLocked() {
+        let shouldWrite = !isOutputMuted && ringInjectionCount == 0
+        halCapture?.setWritesToRing(shouldWrite)
+        if lastLoggedHALWritesToRing != shouldWrite {
+            lastLoggedHALWritesToRing = shouldWrite
+            print("[VoxaMic] HAL writesToRing=\(shouldWrite) (outputMuted=\(isOutputMuted) ringInjections=\(ringInjectionCount))")
+        }
+    }
+
     private func tryStartLocked() {
         guard AVAudioApplication.shared.recordPermission == .granted else {
             print("[VoxaMic] Feeder not started — grant microphone access for Voxa")
@@ -42,22 +132,20 @@ final class VoxaVirtualMicFeeder: @unchecked Sendable {
             return
         }
 
-        guard let ring = VoxaMicSharedMemory() else {
+        guard ensureRingMappedLocked(resetIfNew: true) != nil, let ring else {
             print("[VoxaMic] Failed to open ring file \(VoxaMicRingLayout.ringPath)")
             publishStatus(running: false, captureName: nil, detail: "Reinstall VoxaMic.driver (AudioDriver/install.sh).")
             return
         }
+        startLiveCaptureLocked(ring: ring)
+        syncHALWritesToRingLocked()
+        publishOutputMuteState()
+    }
 
-        VoxaMicRingWriter.reset(ring)
-        print("[VoxaMic] Ring reset for new capture session")
-
-        if VoxaMicTemporaryTest.feedProjectAudioWAV {
-            startTemporaryWAVFeeder(ring: ring)
-            return
-        }
-
+    private func startLiveCaptureLocked(ring: VoxaMicSharedMemory) {
         let defaultInput = currentDefaultInputDevice()
         guard let captureDevice = resolvePhysicalCaptureDevice(preferredOver: defaultInput) else {
+            isRunning = false
             publishStatus(running: false, captureName: nil, detail: "No physical microphone found.")
             return
         }
@@ -72,45 +160,27 @@ final class VoxaVirtualMicFeeder: @unchecked Sendable {
         do {
             try capture.start(captureDeviceID: captureDevice.id, ring: ring)
             halCapture = capture
+            liveCaptureDeviceName = captureDevice.name
             isRunning = true
             log.info("Voxa virtual mic feeder started (HAL)")
-            publishStatus(running: true, captureName: captureDevice.name, detail: statusDetail)
+            let detail = statusDetail ?? "Your microphone is sent to the virtual mic when unmuted."
+            publishStatus(running: true, captureName: captureDevice.name, detail: detail)
         } catch {
             log.error("HAL capture failed: \(String(describing: error))")
             print("[VoxaMic] HAL capture failed: \(error)")
+            isRunning = false
             publishStatus(running: false, captureName: captureDevice.name, detail: "Microphone capture failed.")
         }
     }
 
-    private func startTemporaryWAVFeeder(ring: VoxaMicSharedMemory) {
-        guard let url = VoxaMicTemporaryTest.projectAudioWAVURL else {
-            print("[VoxaMic] TEMP: Audio.wav not found — place it in the Voxa repo root (next to Voxa.xcodeproj)")
-            publishStatus(running: false, captureName: nil, detail: "TEMP: Audio.wav not found.")
-            return
-        }
-
-        let feeder = VoxaMicWAVFileFeeder()
-        do {
-            try feeder.start(url: url, ring: ring)
-            wavFeeder = feeder
-            isRunning = true
-            publishStatus(
-                running: true,
-                captureName: "Audio.wav (TEMP)",
-                detail: "Looping Audio.wav into virtual mic. Set feedProjectAudioWAV = false for real mic."
-            )
-        } catch {
-            print("[VoxaMic] TEMP WAV feeder failed: \(error)")
-            publishStatus(running: false, captureName: nil, detail: "TEMP: failed to load Audio.wav.")
-        }
-    }
-
     private func stopLocked() {
-        wavFeeder?.stop()
-        wavFeeder = nil
         halCapture?.stop()
         halCapture = nil
+        ring = nil
+        liveCaptureDeviceName = nil
         isRunning = false
+        ringInjectionCount = 0
+        isOutputMuted = false
         print("[VoxaMic] Feeder stopped")
         publishStatus(running: false, captureName: nil, detail: nil)
     }
@@ -207,8 +277,16 @@ final class VoxaVirtualMicFeeder: @unchecked Sendable {
             VoxaVirtualMicFeederStatus.shared.apply(
                 running: running,
                 captureDeviceName: captureName,
-                detailMessage: detail
+                detailMessage: detail,
+                isOutputMuted: isOutputMuted,
+                muteToggleAvailable: running
             )
+        }
+    }
+
+    private func publishOutputMuteState() {
+        Task { @MainActor in
+            VoxaVirtualMicFeederStatus.shared.setOutputMuted(isOutputMuted)
         }
     }
 }

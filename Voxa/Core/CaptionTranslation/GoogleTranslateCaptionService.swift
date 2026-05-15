@@ -17,7 +17,9 @@ final class GoogleTranslateCaptionService: LiveCaptionTranslationServicing, @unc
         _ = callContextNotes
         let targetCode = Self.googleLanguageCode(from: targetLocaleIdentifier)
         let translated = try await client.translate(text: transcript, targetLanguageCode: targetCode)
-        return CorrectionTranslationPayload(corrected: transcript, translation: translated)
+        let payload = CorrectionTranslationPayload(corrected: transcript, translation: translated, actions: [])
+        print("[CallGoal] Google Translate path — no actions from API (actions=0)")
+        return payload
     }
 
     /// Maps BCP-47 identifiers (e.g. `en_US`, `uk-UA`) to Google’s `target` language codes.

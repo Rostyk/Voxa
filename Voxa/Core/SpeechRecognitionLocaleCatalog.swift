@@ -3,6 +3,13 @@ import Speech
 
 /// Locales supported for dictation-style speech on this Mac (`SFSpeechRecognizer` pool). Shared by speech and translation pickers.
 enum SpeechRecognitionLocaleCatalog {
+    /// App default for the original-language (speech) picker — resolved against supported locales on this Mac.
+    static let defaultPreferredIdentifier = "es-ES"
+
+    static var defaultSpeechLocaleIdentifier: String {
+        resolvedIdentifier(defaultPreferredIdentifier)
+    }
+
     static func supportedIdentifiers() -> [String] {
         Array(SFSpeechRecognizer.supportedLocales()).map(\.identifier).sorted()
     }

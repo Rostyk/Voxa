@@ -137,8 +137,9 @@ extension OpenAIRestClient {
         do {
             let payload = try JSONDecoder().decode(CorrectionTranslationPayload.self, from: data)
             print(
-                "[GPT] parse inner JSON OK correctedChars=\(payload.corrected.count) translationChars=\(payload.translation.count)"
+                "[GPT] parse inner JSON OK correctedChars=\(payload.corrected.count) translationChars=\(payload.translation.count) actions=\(payload.actions.count)"
             )
+            CallGoalActionLog.logList(payload.actions, context: "parsed from GPT JSON")
             return payload
         } catch {
             print("[GPT] parse inner JSON decode failed error=\(error.localizedDescription) rawPrefix=\(raw.prefix(300))")

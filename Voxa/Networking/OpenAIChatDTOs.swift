@@ -53,4 +53,24 @@ struct OpenAIChatCompletionsResponse: Decodable, Sendable {
 struct CorrectionTranslationPayload: Codable, Equatable, Sendable {
     let corrected: String
     let translation: String
+    let actions: [CallGoalAction]
+
+    init(corrected: String, translation: String, actions: [CallGoalAction] = []) {
+        self.corrected = corrected
+        self.translation = translation
+        self.actions = actions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        corrected = try container.decode(String.self, forKey: .corrected)
+        translation = try container.decode(String.self, forKey: .translation)
+        actions = try container.decodeIfPresent([CallGoalAction].self, forKey: .actions) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case corrected
+        case translation
+        case actions
+    }
 }

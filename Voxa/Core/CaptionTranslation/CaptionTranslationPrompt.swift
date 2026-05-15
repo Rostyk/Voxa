@@ -6,28 +6,38 @@ enum CaptionTranslationPrompt {
     static func chatRequest(
         model: String,
         rawTranscript: String,
-        callContext: String,
+        callGoal: String,
         targetLanguageLabel: String
     ) -> OpenAIChatCompletionsRequest {
-        let contextLine = callContext.isEmpty ? "(none provided)" : callContext
+        let goalLine = callGoal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "(none — infer reasonable actions from the line only)"
+            : callGoal.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let system = """
-        You are assisting with a **live phone or video call** that is being **transcribed in real time** on the user’s Mac (Apple / system speech-to-text). The user reads your output while the call is still happening.
+        You assist on a **live phone/video call** (real-time ASR). The user reads your JSON while the call continues.
 
-        INPUT NATURE — The `rawTranscript` line is **live call audio → ASR**: it may include wrong words, dropped words, homophones, mid-sentence cuts, filler, or short spans that are **clearly not what a human on the call would have said** in context (random tokens, UI noise, hallucinated fragments). Use CALL CONTEXT + common sense; when something is **obviously** bad ASR or out-of-place with no plausible meaning for this call, **omit or replace** those fragments in `corrected` so the line reads like coherent speech. Do **not** invent facts or names that are not supported by the transcript or call context.
+        **CALL GOAL** — what the user wants to achieve on this call:
+        \(goalLine)
 
-        MAIN TASK — **Translate** the intended meaning into **\(targetLanguageLabel)**. Prefer natural, concise spoken-register phrasing suitable for reading during a call.
+        **INPUT** — `rawTranscript` is noisy live ASR. In `corrected`, fix obvious errors only; do not invent facts.
 
-        OUTPUT — Reply with **only** one JSON object (no markdown, no prose outside JSON, no extra keys). Exactly these two string fields:
-        `corrected` — same source language as the transcript; a **readable** version of what was likely said (fix obvious ASR errors; remove obvious nonsense when confident).
-        `translation` — the translation into **\(targetLanguageLabel)** aligned with `corrected`.
+        **TASKS**
+        1. `translation` — natural **\(targetLanguageLabel)** for the callee’s latest line (`corrected`).
+        2. `actions` — 1–6 concrete steps the **caller** can take next toward the CALL GOAL, based on that line + goal. Use callee language for `text` phrases.
 
-        CALL CONTEXT (optional notes from the user — participants, product names, jargon, topic):
-        \(contextLine)
+        **ACTION TYPES** (field `type`, string `content`):
+        - `dtmf` — touch-tone digits only (e.g. `"1"`, `"*2"`).
+        - `text` — short phrase for the caller to **say** to the callee (already in callee/source language, not \(targetLanguageLabel)).
+        - `voice` — caller must **speak live**; `content` must be `""`. Include **at most one** `voice` when the caller must answer freely.
+
+        Prefer specific `dtmf`/`text` when the line offers menu options or clear replies. Multiple `dtmf`/`text` allowed if several apply.
+
+        **OUTPUT** — single JSON only (no markdown):
+        `{"corrected":"…","translation":"…","actions":[{"type":"dtmf|text|voice","content":"…"}]}`
         """
 
         let user = """
-        Live call transcript line (real-time ASR — may be partial or noisy):
+        Latest callee line (live ASR):
         \(rawTranscript)
         """
 
