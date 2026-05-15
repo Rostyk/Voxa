@@ -15,32 +15,42 @@ enum VoxaVirtualMicSpeechError: LocalizedError {
     }
 }
 
-/// Speaks text into the virtual microphone — **single path** for every play/text call-goal action.
-final class VoxaVirtualMicSpeech: @unchecked Sendable {
-    static let shared = VoxaVirtualMicSpeech()
+/// Speaks text into the virtual microphone — single path for every play/text call-goal action.
+enum VoxaVirtualMicSpeech {
+    /// Must run on `VoxaVirtualMicPlaybackExecutor.queue` only.
+    static func speakOnPlaybackQueue(text: String, localeIdentifier: String) throws {
+        VoxaVirtualMicPlaybackExecutor.assertNotOnMainThread("speakOnPlaybackQueue")
 
-    private init() {}
-
-    func speak(_ text: String, localeIdentifier: String? = nil) async throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw VoxaVirtualMicSpeechError.emptyText }
 
-        let locale = localeIdentifier ?? ""
-        try await VoxaVirtualMicPlaybackExecutor.run {
-            VoxaVirtualMicFeeder.shared.startIfNeeded()
-            let buffer = try self.synthesizeToRingBuffer(text: trimmed, localeIdentifier: locale)
-            try await VoxaVirtualMicFeeder.shared.performRingInjection { ring in
-                try VoxaMicRingPCMStreamer.streamBuffer(
-                    buffer,
-                    to: ring,
-                    logLabel: "tts",
-                    options: .virtualMicPlayback
-                )
+        VoxaVirtualMicFeeder.shared.startIfNeeded()
+        let buffer = try synthesizeToRingBuffer(text: trimmed, localeIdentifier: localeIdentifier)
+        try VoxaVirtualMicFeeder.shared.performRingInjectionSync { ring in
+            try VoxaMicRingPCMStreamer.streamBuffer(
+                buffer,
+                to: ring,
+                logLabel: "tts",
+                options: .virtualMicPlayback
+            )
+        }
+    }
+
+    /// Enqueues TTS on the playback queue; returns immediately (UI thread safe).
+    static func enqueueSpeak(text: String, localeIdentifier: String, onComplete: @escaping @Sendable (Error?) -> Void) {
+        VoxaVirtualMicPlaybackExecutor.dispatch {
+            do {
+                try speakOnPlaybackQueue(text: text, localeIdentifier: localeIdentifier)
+                DispatchQueue.main.async { onComplete(nil) }
+            } catch {
+                DispatchQueue.main.async { onComplete(error) }
             }
         }
     }
 
-    private func synthesizeToRingBuffer(text: String, localeIdentifier: String) throws -> AVAudioPCMBuffer {
+    private static func synthesizeToRingBuffer(text: String, localeIdentifier: String) throws -> AVAudioPCMBuffer {
+        VoxaVirtualMicPlaybackExecutor.assertNotOnMainThread("synthesizeToRingBuffer")
+
         guard let ringFormat = VoxaMicPCMFileLoader.ringFormat else {
             throw VoxaMicPCMFileLoader.Error.ringFormatUnavailable
         }

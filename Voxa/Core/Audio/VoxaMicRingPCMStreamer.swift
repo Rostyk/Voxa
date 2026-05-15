@@ -21,6 +21,8 @@ enum VoxaMicRingPCMStreamer {
         logLabel: String? = nil,
         options: Options = Options()
     ) throws {
+        VoxaVirtualMicPlaybackExecutor.assertNotOnMainThread("streamBuffer")
+
         guard let ringFormat = VoxaMicPCMFileLoader.ringFormat else {
             throw VoxaMicPCMFileLoader.Error.ringFormatUnavailable
         }

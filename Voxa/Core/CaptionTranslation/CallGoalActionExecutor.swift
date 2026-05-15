@@ -10,26 +10,41 @@ enum CallGoalActionExecutor {
         )
         print("[CallGoal] perform locale=\(speechLocaleIdentifier)")
 
-        Task {
-            await MainActor.run {
-                VoxaVirtualMicFeederStatus.shared.clearLastActionError()
-            }
-            print("[CallGoal] perform Task started type=\(normalized.type.rawValue)")
-            do {
-                switch normalized.type {
-                case .dtmf:
-                    try await performDTMF(normalized.content)
-                    print("[CallGoal] perform dtmf SUCCESS")
-                case .text:
-                    print(
-                        "[CallGoal] perform text → VoxaVirtualMicSpeech.speak " +
-                            "locale=\(speechLocaleIdentifier) chars=\(normalized.content.count)"
-                    )
-                    try await VoxaVirtualMicSpeech.shared.speak(
-                        normalized.content,
-                        localeIdentifier: speechLocaleIdentifier
-                    )
+        let locale = speechLocaleIdentifier
+        let actionType = normalized.type
+        let actionContent = normalized.content
+
+        switch actionType {
+        case .text:
+            print(
+                "[CallGoal] perform text → playback queue locale=\(locale) chars=\(actionContent.count)"
+            )
+            VoxaVirtualMicSpeech.enqueueSpeak(text: actionContent, localeIdentifier: locale) { error in
+                if let error {
+                    let detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    print("[CallGoal] perform text FAILED: \(detail)")
+                    Task { @MainActor in
+                        VoxaVirtualMicFeederStatus.shared.setLastActionError(detail)
+                    }
+                } else {
                     print("[CallGoal] perform text SUCCESS")
+                }
+            }
+        case .dtmf, .voice:
+            VoxaVirtualMicPlaybackExecutor.dispatch {
+                performNonSpeechAction(type: actionType, content: actionContent)
+            }
+        }
+    }
+
+    private static func performNonSpeechAction(type: CallGoalAction.ActionType, content: String) {
+        Task.detached(priority: .userInitiated) {
+            print("[CallGoal] perform Task started type=\(type.rawValue) (background)")
+            do {
+                switch type {
+                case .dtmf:
+                    try await performDTMF(content)
+                    print("[CallGoal] perform dtmf SUCCESS")
                 case .voice:
                     print("[CallGoal] perform voice → unmute virtual mic (live HAL)")
                     await MainActor.run {
@@ -37,16 +52,17 @@ enum CallGoalActionExecutor {
                         VoxaVirtualMicFeeder.shared.setOutputMuted(false)
                     }
                     print("[CallGoal] perform voice SUCCESS isOutputMuted=false")
+                case .text:
+                    break
                 }
             } catch {
                 let detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                print("[CallGoal] perform FAILED type=\(normalized.type.rawValue) error=\(error)")
-                print("[CallGoal] perform FAILED detail: \(detail)")
+                print("[CallGoal] perform FAILED type=\(type.rawValue) error=\(error)")
                 await MainActor.run {
                     VoxaVirtualMicFeederStatus.shared.setLastActionError(detail)
                 }
             }
-            print("[CallGoal] perform Task finished type=\(normalized.type.rawValue)")
+            print("[CallGoal] perform Task finished type=\(type.rawValue)")
         }
     }
 

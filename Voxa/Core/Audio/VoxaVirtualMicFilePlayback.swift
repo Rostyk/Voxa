@@ -45,38 +45,52 @@ enum VoxaVirtualMicFilePlayback {
         return paths
     }
 
-    static func playRecordingWAV() async throws {
+    static func enqueuePlayRecordingWAV(onComplete: @escaping @Sendable (Error?) -> Void) {
         guard let url = recordingWAVURL() else {
-            throw VoxaVirtualMicFilePlaybackError.recordingNotFound(searched: searchedRecordingPaths())
+            let error = VoxaVirtualMicFilePlaybackError.recordingNotFound(searched: searchedRecordingPaths())
+            DispatchQueue.main.async { onComplete(error) }
+            return
         }
         print("[VoxaMic] playRecordingWAV path=\(url.path)")
-        try await play(url: url)
+        enqueuePlay(url: url, onComplete: onComplete)
     }
 
-    static func play(url: URL) async throws {
-        try await VoxaVirtualMicPlaybackExecutor.run {
-            VoxaVirtualMicFeeder.shared.startIfNeeded()
-            guard let ringFormat = VoxaMicPCMFileLoader.ringFormat else {
-                throw VoxaMicPCMFileLoader.Error.ringFormatUnavailable
+    static func enqueuePlay(url: URL, onComplete: @escaping @Sendable (Error?) -> Void) {
+        VoxaVirtualMicPlaybackExecutor.dispatch {
+            do {
+                try playOnPlaybackQueue(url: url)
+                DispatchQueue.main.async { onComplete(nil) }
+            } catch {
+                DispatchQueue.main.async { onComplete(error) }
             }
-
-            let buffer = try VoxaMicPCMFileLoader.loadAndConvert(url: url, targetFormat: ringFormat)
-            let durationMs = Double(buffer.frameLength) / ringFormat.sampleRate * 1000
-            print(
-                "[VoxaMic] file playback START \(url.lastPathComponent) frames=\(buffer.frameLength) " +
-                    "≈\(String(format: "%.0f", durationMs))ms paceRealtime=true"
-            )
-
-            try await VoxaVirtualMicFeeder.shared.performRingInjection { ring in
-                try VoxaMicRingPCMStreamer.streamBuffer(
-                    buffer,
-                    to: ring,
-                    logLabel: url.lastPathComponent,
-                    options: .virtualMicPlayback
-                )
-            }
-
-            print("[VoxaMic] file playback SUCCESS \(url.lastPathComponent)")
         }
+    }
+
+    /// Must run on `VoxaVirtualMicPlaybackExecutor.queue` only.
+    private static func playOnPlaybackQueue(url: URL) throws {
+        VoxaVirtualMicPlaybackExecutor.assertNotOnMainThread("playOnPlaybackQueue")
+
+        VoxaVirtualMicFeeder.shared.startIfNeeded()
+        guard let ringFormat = VoxaMicPCMFileLoader.ringFormat else {
+            throw VoxaMicPCMFileLoader.Error.ringFormatUnavailable
+        }
+
+        let buffer = try VoxaMicPCMFileLoader.loadAndConvert(url: url, targetFormat: ringFormat)
+        let durationMs = Double(buffer.frameLength) / ringFormat.sampleRate * 1000
+        print(
+            "[VoxaMic] file playback START \(url.lastPathComponent) frames=\(buffer.frameLength) " +
+                "≈\(String(format: "%.0f", durationMs))ms paceRealtime=true"
+        )
+
+        try VoxaVirtualMicFeeder.shared.performRingInjectionSync { ring in
+            try VoxaMicRingPCMStreamer.streamBuffer(
+                buffer,
+                to: ring,
+                logLabel: url.lastPathComponent,
+                options: .virtualMicPlayback
+            )
+        }
+
+        print("[VoxaMic] file playback SUCCESS \(url.lastPathComponent)")
     }
 }

@@ -53,8 +53,10 @@ final class VoxaVirtualMicFeeder: @unchecked Sendable {
         stopLocked()
     }
 
-    /// Pauses HAL→ring while `body` runs (e.g. TTS), then restores prior mute state.
-    func performRingInjection(_ body: @escaping (VoxaMicSharedMemory) async throws -> Void) async throws {
+    /// Pauses HAL→ring while `body` runs (TTS/WAV). Call only from `VoxaVirtualMicPlaybackExecutor.queue`.
+    func performRingInjectionSync(_ body: (VoxaMicSharedMemory) throws -> Void) throws {
+        VoxaVirtualMicPlaybackExecutor.assertNotOnMainThread("performRingInjectionSync")
+
         stateLock.lock()
         if !isRunning {
             print("[VoxaMic] performRingInjection: ring-only (HAL not started — TTS without mic capture)")
@@ -97,7 +99,7 @@ final class VoxaVirtualMicFeeder: @unchecked Sendable {
         }
 
         do {
-            try await body(ring)
+            try body(ring)
             print("[VoxaMic] performRingInjection body completed OK #\(injectionIndex)")
         } catch {
             print("[VoxaMic] performRingInjection body FAILED #\(injectionIndex): \(error)")
@@ -277,20 +279,22 @@ final class VoxaVirtualMicFeeder: @unchecked Sendable {
     }
 
     private func publishStatus(running: Bool, captureName: String?, detail: String?) {
-        Task { @MainActor in
+        let muted = isOutputMuted
+        DispatchQueue.main.async {
             VoxaVirtualMicFeederStatus.shared.apply(
                 running: running,
                 captureDeviceName: captureName,
                 detailMessage: detail,
-                isOutputMuted: isOutputMuted,
+                isOutputMuted: muted,
                 muteToggleAvailable: running
             )
         }
     }
 
     private func publishOutputMuteState() {
-        Task { @MainActor in
-            VoxaVirtualMicFeederStatus.shared.setOutputMuted(isOutputMuted)
+        let muted = isOutputMuted
+        DispatchQueue.main.async {
+            VoxaVirtualMicFeederStatus.shared.setOutputMuted(muted)
         }
     }
 }

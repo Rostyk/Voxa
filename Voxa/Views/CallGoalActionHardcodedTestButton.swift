@@ -13,17 +13,12 @@ enum CallGoalActionHardcodedTest {
     }
 
     static func fireRecordingWAV() {
-        print("[UI] tap WAV recording button — VoxaVirtualMicFilePlayback.playRecordingWAV")
-        Task {
-            await MainActor.run {
-                VoxaVirtualMicFeederStatus.shared.clearLastActionError()
-            }
-            do {
-                try await VoxaVirtualMicFilePlayback.playRecordingWAV()
-            } catch {
+        print("[UI] tap WAV recording button — VoxaVirtualMicFilePlayback.enqueuePlayRecordingWAV")
+        VoxaVirtualMicFilePlayback.enqueuePlayRecordingWAV { error in
+            if let error {
                 let detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 print("[UI] WAV recording playback FAILED: \(error)")
-                await MainActor.run {
+                Task { @MainActor in
                     VoxaVirtualMicFeederStatus.shared.setLastActionError(detail)
                 }
             }
