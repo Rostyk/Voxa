@@ -112,7 +112,7 @@ final class CallAudioRecorder {
             let shouldProcessAudio = callbackCounter % 4 == 0
             guard shouldProcessAudio else { return }
             let newLevels = CallAudioLevels.extractAudioLevels(from: buffer, segments: 1)
-            Task { @MainActor in
+            DispatchQueue.main.async { [weak self] in
                 self?.updateAudioLevels(newLevels)
             }
         }

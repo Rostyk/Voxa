@@ -134,23 +134,42 @@ final class CaptionTranslationViewModel {
             "[Caption] segment committed — translate once turn=\(lateCaptionTurnID) chars=\(key.count) requestID=\(requestID) sessionGen=\(sessionGen)"
         )
 
+        guard let service = activeTranslationService() else {
+            refreshEngineAvailabilityMessage()
+            let msg = translationLastError ?? "Translation backend is not configured for \(translationEngine.displayName)."
+            print("[Caption] translate commit skipped — \(msg)")
+            return
+        }
+
         commitTranslationInFlightCount += 1
         isTranslating = true
 
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer {
-                self.commitTranslationInFlightCount -= 1
-                if self.commitTranslationInFlightCount <= 0 {
-                    self.commitTranslationInFlightCount = 0
-                    self.isTranslating = false
-                }
-            }
-            await self.runCommitTranslation(
+        let engine = translationEngine
+        let locale = translationLocaleIdentifier
+        let goal = callGoal
+        let targetLabel =
+            Locale.current.localizedString(forIdentifier: locale) ?? locale
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            await CaptionTranslationViewModel.runCommitTranslationOffMain(
+                service: service,
+                engine: engine,
                 requestID: requestID,
                 turnID: lateCaptionTurnID,
                 text: key,
-                sessionGenerationAtStart: sessionGen
+                targetLabel: targetLabel,
+                localeIdentifier: locale,
+                callGoal: goal,
+                sessionGenerationAtStart: sessionGen,
+                deliver: { result in
+                    await self?.finishCommitTranslationOnMain(
+                        requestID: requestID,
+                        turnID: lateCaptionTurnID,
+                        transcript: key,
+                        sessionGenerationAtStart: sessionGen,
+                        result: result
+                    )
+                }
             )
         }
     }
@@ -179,29 +198,31 @@ final class CaptionTranslationViewModel {
         }
     }
 
-    private func runCommitTranslation(
+    private enum CommitTranslationResult: Sendable {
+        case success(CorrectionTranslationPayload)
+        case failure(String)
+        case cancelled
+    }
+
+    /// Network + decode off the main actor (same pattern as virtual-mic playback).
+    private static func runCommitTranslationOffMain(
+        service: LiveCaptionTranslationServicing,
+        engine: LiveCaptionTranslationEngine,
         requestID: UInt64,
         turnID: UUID,
         text: String,
-        sessionGenerationAtStart: UInt64
+        targetLabel: String,
+        localeIdentifier: String,
+        callGoal: String,
+        sessionGenerationAtStart: UInt64,
+        deliver: @escaping @Sendable (CommitTranslationResult) async -> Void
     ) async {
-        guard let service = activeTranslationService() else {
-            refreshEngineAvailabilityMessage()
-            let msg = translationLastError ?? "Translation backend is not configured for \(translationEngine.displayName)."
-            print("[Caption] translate commit skipped — \(msg)")
-            return
-        }
-
-        let targetLabel =
-            Locale.current.localizedString(forIdentifier: translationLocaleIdentifier)
-            ?? translationLocaleIdentifier
-
         print(
-            "[Caption] translate commit start id=\(requestID) turn=\(turnID) engine=\(translationEngine.rawValue) target=\"\(targetLabel)\" chars=\(text.count) preview=\"\(Self.logPreview(text))\""
+            "[Caption] translate commit start (background) id=\(requestID) turn=\(turnID) engine=\(engine.rawValue) target=\"\(targetLabel)\" chars=\(text.count) preview=\"\(logPreview(text))\""
         )
 
-        if translationEngine == .gpt {
-            let goalPreview = Self.logPreview(callGoal, maxLen: 120)
+        if engine == .gpt {
+            let goalPreview = logPreview(callGoal, maxLen: 120)
             print("[GPT] invoking chat/completions commit id=\(requestID) callGoalChars=\(callGoal.count) goalPreview=\(goalPreview)")
         }
 
@@ -209,19 +230,52 @@ final class CaptionTranslationViewModel {
         do {
             let payload = try await service.translateLine(
                 transcript: text,
-                targetLocaleIdentifier: translationLocaleIdentifier,
+                targetLocaleIdentifier: localeIdentifier,
                 callContextNotes: callGoal
             )
             let wall = CFAbsoluteTimeGetCurrent() - wallStart
+            print(
+                "[Caption] translate commit RESULT (background) id=\(requestID) wall=\(String(format: "%.3f", wall))s correctedChars=\(payload.corrected.count) translationChars=\(payload.translation.count) sessionGen=\(sessionGenerationAtStart)"
+            )
+            await deliver(.success(payload))
+        } catch is CancellationError {
+            print("[Caption] translate commit cancelled id=\(requestID)")
+            await deliver(.cancelled)
+        } catch {
+            print(
+                "[Caption] translate commit ERROR (background) id=\(requestID) wall=\(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - wallStart))s \(error.localizedDescription)"
+            )
+            await deliver(.failure(error.localizedDescription))
+        }
+    }
 
-            let staleRequest = requestID != latestRequestID
-            if staleRequest {
+    private func finishCommitTranslationOnMain(
+        requestID: UInt64,
+        turnID: UUID,
+        transcript: String,
+        sessionGenerationAtStart: UInt64,
+        result: CommitTranslationResult
+    ) async {
+        defer {
+            commitTranslationInFlightCount -= 1
+            if commitTranslationInFlightCount <= 0 {
+                commitTranslationInFlightCount = 0
+                isTranslating = false
+            }
+        }
+
+        switch result {
+        case .cancelled:
+            return
+        case .failure(let message):
+            if requestID == latestRequestID {
+                translationLastError = message
+            }
+            return
+        case .success(let payload):
+            if requestID != latestRequestID {
                 print(
-                    "[Caption] translate commit STALE id=\(requestID) latest=\(latestRequestID) wall=\(String(format: "%.3f", wall))s — still merging into turn \(turnID)"
-                )
-            } else {
-                print(
-                    "[Caption] translate commit RESULT id=\(requestID) wall=\(String(format: "%.3f", wall))s correctedChars=\(payload.corrected.count) translationChars=\(payload.translation.count)"
+                    "[Caption] translate commit STALE id=\(requestID) latest=\(latestRequestID) — still merging into turn \(turnID)"
                 )
             }
 
@@ -234,18 +288,9 @@ final class CaptionTranslationViewModel {
                 "[Caption] translate commit delivering merge turn=\(turnID) correctedChars=\(payload.corrected.count) translationChars=\(payload.translation.count) actions=\(payload.actions.count)"
             )
             CallGoalActionLog.logList(payload.actions, context: "delivering to ConversationViewModel turn=\(turnID)")
-            onSupersededTranslation?(turnID, text, payload.corrected, payload.translation, payload.actions)
+            onSupersededTranslation?(turnID, transcript, payload.corrected, payload.translation, payload.actions)
             if requestID == latestRequestID {
                 translationLastError = nil
-            }
-        } catch is CancellationError {
-            print("[Caption] translate commit cancelled id=\(requestID)")
-        } catch {
-            print(
-                "[Caption] translate commit ERROR id=\(requestID) wall=\(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - wallStart))s \(error.localizedDescription)"
-            )
-            if requestID == latestRequestID {
-                translationLastError = error.localizedDescription
             }
         }
     }

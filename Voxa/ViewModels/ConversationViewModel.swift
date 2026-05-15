@@ -323,13 +323,15 @@ private final class SpeechUIBridge: @unchecked Sendable {
         }
     }
 
+    /// Avoid `queue.sync` from the main thread (can stall UI during bind/clear).
     func cancelAll() {
-        queue.sync {
-            partialFlush?.cancel()
-            partialFlush = nil
-            partialLatest = ""
-            energyFlush?.cancel()
-            energyFlush = nil
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.partialFlush?.cancel()
+            self.partialFlush = nil
+            self.partialLatest = ""
+            self.energyFlush?.cancel()
+            self.energyFlush = nil
         }
     }
 }
