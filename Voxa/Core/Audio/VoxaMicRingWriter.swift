@@ -9,7 +9,7 @@ enum VoxaMicRingWriter {
         OSMemoryBarrier()
     }
 
-    static func write(pcm: AVAudioPCMBuffer, to ring: VoxaMicSharedMemory, logEveryNTicks: UInt64 = 0, tick: UInt64 = 0) {
+    static func write(pcm: AVAudioPCMBuffer, to ring: VoxaMicSharedMemory) {
         guard pcm.frameLength > 0 else { return }
 
         let ringChannels = Int(VoxaMicRingLayout.channelCount)
@@ -19,7 +19,6 @@ enum VoxaMicRingWriter {
         let frames = Int(pcm.frameLength)
         let srcChannels = max(1, Int(pcm.format.channelCount))
 
-        var peak: Float = 0
         if let floatChannel = pcm.floatChannelData {
             for n in 0..<frames {
                 let ringFrame = Int(writeIndex % UInt64(capacity))
@@ -27,7 +26,6 @@ enum VoxaMicRingWriter {
                 for c in 0..<ringChannels {
                     let srcChannel = min(c, srcChannels - 1)
                     let s = floatChannel[srcChannel][n]
-                    peak = max(peak, abs(s))
                     dst[dstOffset + c] = Int16(max(-1.0, min(1.0, s)) * Float(Int16.max))
                 }
                 writeIndex += 1
@@ -40,7 +38,6 @@ enum VoxaMicRingWriter {
                     let srcChannel = min(c, srcChannels - 1)
                     let index = srcChannels == 1 ? n : (n * srcChannels + srcChannel)
                     let sample = interleaved[index]
-                    peak = max(peak, abs(Float(sample) / Float(Int16.max)))
                     dst[dstOffset + c] = sample
                 }
                 writeIndex += 1
@@ -52,7 +49,6 @@ enum VoxaMicRingWriter {
                 for c in 0..<ringChannels {
                     let srcChannel = min(c, srcChannels - 1)
                     let sample = channelData[srcChannel][n]
-                    peak = max(peak, abs(Float(sample) / Float(Int16.max)))
                     dst[dstOffset + c] = sample
                 }
                 writeIndex += 1
@@ -61,9 +57,5 @@ enum VoxaMicRingWriter {
 
         ring.header.pointee.writeFrameIndex = writeIndex
         OSMemoryBarrier()
-
-        if logEveryNTicks > 0, tick <= 5 || tick % logEveryNTicks == 0 {
-            print("[VoxaMic] ring writeIndex=\(writeIndex) peak=\(String(format: "%.4f", peak))")
-        }
     }
 }

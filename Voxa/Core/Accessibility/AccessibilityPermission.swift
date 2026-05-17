@@ -12,10 +12,21 @@ final class AccessibilityPermission {
 
     private init() {
         refresh()
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refresh()
+        }
     }
 
     func refresh() {
-        isGranted = AXIsProcessTrusted()
+        let granted = AXIsProcessTrusted()
+        if granted != isGranted {
+            print("[AccessibilityPermission] isGranted \(isGranted) → \(granted)")
+        }
+        isGranted = granted
     }
 
     /// Opens the system prompt to add Voxa to Accessibility.

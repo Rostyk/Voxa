@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Observation
 
@@ -14,6 +15,7 @@ final class ConversationViewModel {
     let captionTranslation = CaptionTranslationViewModel()
 
     @ObservationIgnored private let speech = VoiceToTextManager()
+    @ObservationIgnored private let bubbleAudio = BubbleSegmentAudioBuffer()
     @ObservationIgnored private var lastEnergySpeaking: Bool?
     @ObservationIgnored private let speechUI = SpeechUIBridge()
 
@@ -82,6 +84,7 @@ final class ConversationViewModel {
         recorder.onLiveBuffer = nil
         speechUI.cancelAll()
         speech.stop()
+        bubbleAudio.reset()
 
         guard state.speechAuthorized else {
             var s = state
@@ -109,6 +112,7 @@ final class ConversationViewModel {
             }
         )
         recorder.onLiveBuffer = { [weak self] buffer in
+            self?.bubbleAudio.append(buffer)
             self?.speech.append(buffer)
         }
         lastEnergySpeaking = nil
@@ -122,6 +126,7 @@ final class ConversationViewModel {
         recorder.onLiveBuffer = nil
         speechUI.cancelAll()
         speech.stop()
+        bubbleAudio.reset()
         var s = state
         s.liveTranscript = ""
         s.isSpeakerSpeaking = false
@@ -132,6 +137,7 @@ final class ConversationViewModel {
 
     func clearConversation() {
         print("[ConversationViewModel] clearConversation")
+        bubbleAudio.reset()
         speechUI.cancelAll()
         var s = state
         s.history = []
@@ -151,9 +157,14 @@ final class ConversationViewModel {
     fileprivate func applyCommit(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        let audioSnapshot = bubbleAudio.takeSnapshotAndReset()
+        let useFluid = captionTranslation.correctUsingFluidAudio
         let turn = ConversationTurn(
             speakerLabel: Self.speakerLabel,
             text: trimmed,
+            fluidAudioText: nil,
+            isAwaitingFluidAudio: useFluid,
             gptCorrected: nil,
             gptTranslation: nil
         )
@@ -165,10 +176,101 @@ final class ConversationViewModel {
         s.liveTranscript = ""
         s.isSilent = !s.isSpeakerSpeaking
         state = s
-        captionTranslation.onSegmentCommitted(lateCaptionTurnID: turn.id, committedTranscript: trimmed)
+        let audioSec = Double(audioSnapshot.count) / 16_000.0
         print(
-            "[ConversationViewModel] applyCommit historyCount=\(s.history.count) chars=\(trimmed.count) \(Self.commitLogPreview(trimmed))"
+            "[ConversationViewModel] applyCommit historyCount=\(s.history.count) appleChars=\(trimmed.count) fluid=\(useFluid) audioSamples=\(audioSnapshot.count) ≈\(String(format: "%.2f", audioSec))s \(Self.commitLogPreview(trimmed))"
         )
+
+        if useFluid {
+            scheduleFluidAudioThenTranslate(
+                turnID: turn.id,
+                appleTranscript: trimmed,
+                audioSnapshot: audioSnapshot
+            )
+        } else {
+            captionTranslation.onSegmentCommitted(lateCaptionTurnID: turn.id, committedTranscript: trimmed)
+        }
+    }
+
+    private func scheduleFluidAudioThenTranslate(
+        turnID: UUID,
+        appleTranscript: String,
+        audioSnapshot: [Float]
+    ) {
+        let sessionGen = captionTranslation.translationSessionGenerationSnapshot()
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let fluidText: String
+            do {
+                fluidText = try await FluidAudioBubbleTranscriber.shared.transcribe(samples: audioSnapshot)
+            } catch {
+                print(
+                    "[ConversationViewModel] FluidAudio bubble failed turn=\(turnID): \(error.localizedDescription) — falling back to Apple transcript for translation"
+                )
+                await MainActor.run {
+                    self?.finishFluidAudioPath(
+                        turnID: turnID,
+                        appleTranscript: appleTranscript,
+                        fluidText: nil,
+                        sessionGeneration: sessionGen
+                    )
+                }
+                return
+            }
+            await MainActor.run {
+                self?.finishFluidAudioPath(
+                    turnID: turnID,
+                    appleTranscript: appleTranscript,
+                    fluidText: fluidText,
+                    sessionGeneration: sessionGen
+                )
+            }
+        }
+    }
+
+    private func finishFluidAudioPath(
+        turnID: UUID,
+        appleTranscript: String,
+        fluidText: String?,
+        sessionGeneration: UInt64
+    ) {
+        guard sessionGeneration == captionTranslation.translationSessionGenerationSnapshot() else {
+            print("[ConversationViewModel] FluidAudio result discarded — session generation changed turn=\(turnID)")
+            return
+        }
+
+        let trimmedFluid = fluidText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        updateTurnAfterFluidAudio(
+            turnID: turnID,
+            fluidText: trimmedFluid.isEmpty ? nil : trimmedFluid
+        )
+
+        let transcriptForTranslation =
+            trimmedFluid.isEmpty ? appleTranscript : trimmedFluid
+        print(
+            "[ConversationViewModel] FluidAudio → translate turn=\(turnID) fluidChars=\(trimmedFluid.count) useChars=\(transcriptForTranslation.count)"
+        )
+        captionTranslation.onSegmentCommitted(
+            lateCaptionTurnID: turnID,
+            committedTranscript: transcriptForTranslation
+        )
+    }
+
+    private func updateTurnAfterFluidAudio(turnID: UUID, fluidText: String?) {
+        guard let idx = state.history.firstIndex(where: { $0.id == turnID }) else { return }
+        let row = state.history[idx]
+        var s = state
+        s.history[idx] = ConversationTurn(
+            id: row.id,
+            speakerLabel: row.speakerLabel,
+            text: row.text,
+            fluidAudioText: fluidText,
+            isAwaitingFluidAudio: false,
+            gptCorrected: row.gptCorrected,
+            gptTranslation: row.gptTranslation,
+            gptActions: row.gptActions,
+            createdAt: row.createdAt
+        )
+        state = s
     }
 
     /// Merges caption / translation into the history row for `turnID` (may not be the last row if several segments finish out of API order).
@@ -216,6 +318,8 @@ final class ConversationViewModel {
             id: row.id,
             speakerLabel: row.speakerLabel,
             text: row.text,
+            fluidAudioText: row.fluidAudioText,
+            isAwaitingFluidAudio: row.isAwaitingFluidAudio,
             gptCorrected: mergedCorrected,
             gptTranslation: mergedTranslation,
             gptActions: mergedActions,

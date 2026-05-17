@@ -73,7 +73,7 @@ enum VoxaMicRingPCMStreamer {
                 applyGain(options.gain, to: chunk)
             }
             peak = max(peak, measurePeak(chunk))
-            VoxaMicRingWriter.write(pcm: chunk, to: ring, logEveryNTicks: 0, tick: 0)
+            VoxaMicRingWriter.write(pcm: chunk, to: ring)
             offset += chunkFrames
 
             if options.paceRealtime {
@@ -145,7 +145,7 @@ enum VoxaMicRingPCMStreamer {
                 applyGain(options.gain, to: chunk)
             }
             peak = max(peak, measurePeak(chunk))
-            VoxaMicRingWriter.write(pcm: chunk, to: ring, logEveryNTicks: 0, tick: 0)
+            VoxaMicRingWriter.write(pcm: chunk, to: ring)
             offset += chunkFrames
         }
         return offset

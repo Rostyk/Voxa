@@ -4,8 +4,12 @@ import Foundation
 struct ConversationTurn: Identifiable, Hashable, Sendable {
     let id: UUID
     let speakerLabel: String
-    /// Raw committed transcript from speech recognition.
+    /// Raw committed transcript from Apple speech recognition.
     let text: String
+    /// Accurate offline re-transcription of this bubble’s audio (FluidAudio / Parakeet), when enabled.
+    let fluidAudioText: String?
+    /// Waiting for FluidAudio before sending text to translation.
+    let isAwaitingFluidAudio: Bool
     /// GPT “corrected” line at commit time (same language as transcript), if any.
     let gptCorrected: String?
     /// GPT translation at commit time (or filled in shortly after if the request finished late).
@@ -18,6 +22,8 @@ struct ConversationTurn: Identifiable, Hashable, Sendable {
         id: UUID = UUID(),
         speakerLabel: String,
         text: String,
+        fluidAudioText: String? = nil,
+        isAwaitingFluidAudio: Bool = false,
         gptCorrected: String? = nil,
         gptTranslation: String? = nil,
         gptActions: [CallGoalAction] = [],
@@ -26,6 +32,8 @@ struct ConversationTurn: Identifiable, Hashable, Sendable {
         self.id = id
         self.speakerLabel = speakerLabel
         self.text = text
+        self.fluidAudioText = fluidAudioText
+        self.isAwaitingFluidAudio = isAwaitingFluidAudio
         self.gptCorrected = gptCorrected
         self.gptTranslation = gptTranslation
         self.gptActions = gptActions

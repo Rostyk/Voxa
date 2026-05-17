@@ -74,9 +74,6 @@ final class VOAudioTapManager {
                 var skippedSystem = 0
                 var skippedNonConferencing = 0
                 var skippedNoMicInput = 0
-                var allMicInputLines: [String] = []
-                var allowlistedMicInputLines: [String] = []
-                var faceTimeRelatedLines: [String] = []
 
                 for objectID in objectIdentifiers {
                     let pid = try VOAudioUtils.readPID(objectID: objectID)
@@ -90,31 +87,6 @@ final class VOAudioTapManager {
                     let isRunningInput = VOAudioUtils.readProcessIsRunningInput(objectID: objectID)
                     let isSystem = self.isSystemAudioProcess(process)
                     let isAllowlisted = self.isWebBrowserOrVideoConferencing(process)
-                    let isFaceTimeRelated = Self.isFaceTimeRelated(process)
-
-                    if isRunningInput {
-                        let line = Self.describeProcess(
-                            process,
-                            isRunningInput: true,
-                            isSystem: isSystem,
-                            isAllowlisted: isAllowlisted
-                        )
-                        allMicInputLines.append(line)
-                        if isAllowlisted && !isSystem {
-                            allowlistedMicInputLines.append(line)
-                        }
-                    }
-
-                    if isFaceTimeRelated {
-                        faceTimeRelatedLines.append(
-                            Self.describeProcess(
-                                process,
-                                isRunningInput: isRunningInput,
-                                isSystem: isSystem,
-                                isAllowlisted: isAllowlisted
-                            )
-                        )
-                    }
 
                     if isSystem {
                         skippedSystem += 1
@@ -136,19 +108,6 @@ final class VOAudioTapManager {
                     _ = VOAudioUtils.readProcessIsRunning(objectID: objectID)
                     processes.append(process)
                 }
-
-                Self.logScanSummary(
-                    onlyWithMicrophoneInput: onlyWithMicrophoneInput,
-                    totalAudioObjects: objectIdentifiers.count,
-                    skippedSelf: skippedSelf,
-                    skippedSystem: skippedSystem,
-                    skippedNonConferencing: skippedNonConferencing,
-                    skippedNoMicInput: skippedNoMicInput,
-                    allMicInputLines: allMicInputLines,
-                    allowlistedMicInputLines: allowlistedMicInputLines,
-                    faceTimeRelatedLines: faceTimeRelatedLines,
-                    resultProcesses: processes
-                )
 
                 DispatchQueue.main.async {
                     completion(processes, nil)
@@ -328,87 +287,6 @@ final class VOAudioTapManager {
                 print("[VOAudioTapManager] Scan error: \(error)")
             }
             callback(processes)
-        }
-    }
-
-    private static func isFaceTimeRelated(_ process: VOAudioProcess) -> Bool {
-        let name = process.name.lowercased()
-        let bundle = process.bundleID?.lowercased() ?? ""
-        return name.contains("facetime")
-            || name.contains("avconference")
-            || bundle.contains("facetime")
-            || bundle.contains("avconference")
-            || bundle.contains("telephonyutilities")
-    }
-
-    private static func describeProcess(
-        _ process: VOAudioProcess,
-        isRunningInput: Bool,
-        isSystem: Bool,
-        isAllowlisted: Bool
-    ) -> String {
-        let bundle = process.bundleID ?? "—"
-        return "pid=\(process.id) name=\"\(process.name)\" bundle=\(bundle) micInput=\(isRunningInput) allowlist=\(isAllowlisted) system=\(isSystem)"
-    }
-
-    private static func logScanSummary(
-        onlyWithMicrophoneInput: Bool,
-        totalAudioObjects: Int,
-        skippedSelf: Int,
-        skippedSystem: Int,
-        skippedNonConferencing: Int,
-        skippedNoMicInput: Int,
-        allMicInputLines: [String],
-        allowlistedMicInputLines: [String],
-        faceTimeRelatedLines: [String],
-        resultProcesses: [VOAudioProcess]
-    ) {
-        let mode = onlyWithMicrophoneInput ? "mic-only" : "all-allowlisted"
-        let resultLines = resultProcesses.map {
-            let micInput = VOAudioUtils.readProcessIsRunningInput(objectID: $0.objectID)
-            return describeProcess($0, isRunningInput: micInput, isSystem: false, isAllowlisted: true)
-        }
-
-        print(
-            """
-            [VOAudioTapManager] scan(\(mode)) objects=\(totalAudioObjects) \
-            skipped self=\(skippedSelf) system=\(skippedSystem) notAllowlisted=\(skippedNonConferencing) noMicInput=\(skippedNoMicInput) \
-            result=\(resultProcesses.count)
-            """
-        )
-
-        if allMicInputLines.isEmpty {
-            print("[VOAudioTapManager] CoreAudio mic-input processes: (none)")
-        } else {
-            print("[VOAudioTapManager] CoreAudio mic-input processes (\(allMicInputLines.count)):")
-            for line in allMicInputLines {
-                print("[VOAudioTapManager]   \(line)")
-            }
-        }
-
-        if allowlistedMicInputLines.isEmpty {
-            print("[VOAudioTapManager] Allowlisted mic-input processes: (none)")
-        } else {
-            print("[VOAudioTapManager] Allowlisted mic-input processes (\(allowlistedMicInputLines.count)):")
-            for line in allowlistedMicInputLines {
-                print("[VOAudioTapManager]   \(line)")
-            }
-        }
-
-        if !faceTimeRelatedLines.isEmpty {
-            print("[VOAudioTapManager] FaceTime-related audio objects (\(faceTimeRelatedLines.count)):")
-            for line in faceTimeRelatedLines {
-                print("[VOAudioTapManager]   \(line)")
-            }
-        }
-
-        if resultLines.isEmpty {
-            print("[VOAudioTapManager] scan result list: (empty)")
-        } else {
-            print("[VOAudioTapManager] scan result list (\(resultLines.count)):")
-            for line in resultLines {
-                print("[VOAudioTapManager]   \(line)")
-            }
         }
     }
 

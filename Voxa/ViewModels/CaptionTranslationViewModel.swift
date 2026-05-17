@@ -16,6 +16,9 @@ final class CaptionTranslationViewModel {
         set { applyTranslationLocaleIdentifier(newValue) }
     }
 
+    /// When enabled, translation uses FluidAudio’s bubble re-transcription instead of Apple’s committed line.
+    var correctUsingFluidAudio: Bool = false
+
     /// Default is **ChatGPT** (correction + translation + call-goal actions in one call).
     var translationEngine: LiveCaptionTranslationEngine {
         get { _translationEngine }
@@ -172,6 +175,10 @@ final class CaptionTranslationViewModel {
                 }
             )
         }
+    }
+
+    func translationSessionGenerationSnapshot() -> UInt64 {
+        translationSessionGeneration
     }
 
     func onStoppedListening() {

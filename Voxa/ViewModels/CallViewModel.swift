@@ -93,15 +93,11 @@ final class CallViewModel {
     private func handleMicrophoneProcessesChanged(_ newProcesses: [AudioProcess]) {
         let autoScanBool = true
         if newProcesses.isEmpty {
-            print("[CallViewModel] micChanged: (empty)")
+            print("[CallViewModel] micChanged → none isRecording=\(isRecording)")
         } else {
-            print("[CallViewModel] micChanged (\(newProcesses.count)):")
-            for process in newProcesses {
-                let bundle = process.bundleID ?? "—"
-                print("[CallViewModel]   pid=\(process.id) name=\"\(process.name)\" bundle=\(bundle)")
-            }
+            let names = newProcesses.map { "\($0.name) pid=\($0.id)" }.joined(separator: ", ")
+            print("[CallViewModel] micChanged → \(newProcesses.count): \(names) isRecording=\(isRecording)")
         }
-        print("[CallViewModel] autoScan=\(autoScanBool) isRecording=\(isRecording) activated=\(isMonitoringActivated)")
 
         guard isMonitoringActivated else { return }
         guard autoScanBool else { return }

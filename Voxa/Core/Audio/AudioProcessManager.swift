@@ -105,34 +105,28 @@ final class AudioProcessManager {
             self.activeMicrophoneProcesses = mappedMic
             self.foregroundProcess = newForegroundProcess
 
-            Self.logMicProcessList(mappedMic, sdkError: error)
+            if let error {
+                print("[AudioProcessManager] mic scan SDK error: \(error)")
+            }
 
             if previousMicProcesses != mappedMic {
-                print("[AudioProcessManager] mic list changed (\(previousMicProcesses.count) -> \(mappedMic.count)), posting notification")
+                Self.logMicProcessListChange(from: previousMicProcesses, to: mappedMic)
                 NotificationCenter.default.post(
                     name: .microphoneProcessesChanged,
                     object: self,
                     userInfo: ["processes": mappedMic]
                 )
-            } else {
-                print("[AudioProcessManager] mic list unchanged (\(mappedMic.count)), no notification")
             }
         }
     }
 
-    private static func logMicProcessList(_ processes: [AudioProcess], sdkError: VOAudioError?) {
-        if let sdkError {
-            print("[AudioProcessManager] mic scan SDK error: \(sdkError)")
-        }
-        if processes.isEmpty {
-            print("[AudioProcessManager] activeMicrophoneProcesses: (empty)")
+    private static func logMicProcessListChange(from previous: [AudioProcess], to current: [AudioProcess]) {
+        if current.isEmpty {
+            print("[AudioProcessManager] mic list changed \(previous.count) → 0 (none)")
             return
         }
-        print("[AudioProcessManager] activeMicrophoneProcesses (\(processes.count)):")
-        for process in processes {
-            let bundle = process.bundleID ?? "—"
-            print("[AudioProcessManager]   pid=\(process.id) name=\"\(process.name)\" bundle=\(bundle) audioActive=\(process.audioActive)")
-        }
+        let names = current.map { "\($0.name) pid=\($0.id)" }.joined(separator: ", ")
+        print("[AudioProcessManager] mic list changed \(previous.count) → \(current.count): \(names)")
     }
 
     deinit {
