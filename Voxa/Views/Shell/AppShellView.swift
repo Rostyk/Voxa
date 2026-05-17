@@ -51,12 +51,6 @@ struct AppShellView: View {
 
     private var sidebarColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Voxa")
-                .font(.title2.weight(.semibold))
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-                .padding(.bottom, 12)
-
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(AppSection.allCases) { section in
                     SidebarNavRow(
@@ -69,6 +63,7 @@ struct AppShellView: View {
                 }
             }
             .padding(.horizontal, 10)
+            .padding(.top, 12)
 
             Spacer(minLength: 0)
         }

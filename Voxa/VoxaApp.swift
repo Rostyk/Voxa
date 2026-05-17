@@ -6,5 +6,6 @@ struct VoxaApp: App {
         WindowGroup {
             ContentView()
         }
+        .windowToolbarStyle(.unified(showsTitle: false))
     }
 }

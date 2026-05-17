@@ -27,6 +27,12 @@ struct ContentView: View {
         }
         .frame(minWidth: 820, minHeight: 520)
         .voxaShellBackground()
+        .navigationTitle("")
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                VoxaBrandMark(style: .titleBar)
+            }
+        }
         .task {
             await requestPermissionsAndStart()
         }
@@ -54,8 +60,6 @@ struct ContentView: View {
 
     private func permissionGate(message: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Voxa")
-                .font(.title.weight(.semibold))
             Text(message)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
