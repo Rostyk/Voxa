@@ -6,38 +6,37 @@ struct CallListenerCard: View {
     let processes: [AudioProcess]
     let isListening: Bool
 
+    private var statusCaption: String {
+        isListening
+            ? "Capturing system audio from active call apps."
+            : "Waiting for a call app (FaceTime, Zoom, Chrome) to use the microphone."
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 10) {
                 Image(systemName: "waveform.circle.fill")
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(isListening ? Color.red : Color.secondary)
-                Text("Call listener")
-                    .font(.headline.weight(.semibold))
-                Spacer(minLength: 0)
+
+                Text(statusCaption)
+                    .font(isListening ? VoxaTypography.liveStatusActive : VoxaTypography.liveStatusPrimary)
+                    .foregroundStyle(
+                        isListening ? VoxaTypography.liveStatusActiveColor : VoxaTypography.liveStatusPrimaryColor
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
                 listeningBadge
             }
 
-            if processes.isEmpty {
-                Text("No mic app detected")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            } else {
+            if !processes.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(processes) { process in
                         processRow(process)
                     }
                 }
             }
-
-            Text(
-                isListening
-                    ? "Capturing system audio from active call apps."
-                    : "Waiting for a call app (FaceTime, Zoom, Chrome, …) to use the microphone."
-            )
-            .font(.caption)
-            .foregroundStyle(.tertiary)
-            .fixedSize(horizontal: false, vertical: true)
         }
         .padding(VoxaPanelStyle.blockPadding)
         .voxaPanelBackground()

@@ -18,11 +18,17 @@ final class TapTo16kMonoConverter: @unchecked Sendable {
     private var converterInputSignature: String?
 
     /// Appends converted samples to `destination`. Returns `false` if conversion failed.
+    /// `source` must remain valid for the whole call (use `voxaOwnedCopy()` off the process tap).
     @discardableResult
     func appendTapBuffer(_ source: AVAudioPCMBuffer, into destination: inout [Float]) -> Bool {
         guard source.frameLength > 0 else { return true }
 
         let src = source.format
+        guard src.sampleRate > 0, src.channelCount > 0 else {
+            reset()
+            return false
+        }
+
         let signature = Self.formatSignature(src)
         if converterInputSignature != signature {
             converterInputSignature = signature
@@ -48,6 +54,7 @@ final class TapTo16kMonoConverter: @unchecked Sendable {
             return source
         }
         if status == .error || err != nil {
+            reset()
             return false
         }
 

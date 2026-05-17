@@ -7,6 +7,15 @@ enum VoxaPanelStyle {
     static let sidebarWidth: CGFloat = 220
 }
 
+/// Live-call copy hierarchy (listener status, section labels).
+enum VoxaTypography {
+    static let liveStatusPrimary = Font.callout.weight(.semibold)
+    static let liveStatusActive = Font.subheadline.weight(.medium)
+
+    static var liveStatusPrimaryColor: Color { .primary.opacity(0.92) }
+    static var liveStatusActiveColor: Color { .secondary }
+}
+
 /// Shared window chrome — one background for sidebar + content so the shell does not look patchy.
 enum VoxaColors {
     static var shell: Color {

@@ -10,8 +10,8 @@ struct LiveCallGoalBar: View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Call goal")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(VoxaTypography.liveStatusActive)
+                    .foregroundStyle(VoxaTypography.liveStatusActiveColor)
                 Text(goalPreview(caption.callGoal))
                     .font(.body)
                     .foregroundStyle(.primary)

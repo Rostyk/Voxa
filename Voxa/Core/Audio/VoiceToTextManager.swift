@@ -150,13 +150,15 @@ final class VoiceToTextManager: @unchecked Sendable {
     }
 
     func append(_ buffer: AVAudioPCMBuffer) {
+        guard buffer.frameLength > 0 else { return }
+        guard let owned = buffer.voxaOwnedCopy() else { return }
         speechQueue.async { [weak self] in
             guard let self else { return }
             guard self.isRunning else { return }
 
-            let srcSig = Self.formatSignature(buffer.format)
-            guard let chunk = self.convertToSpeechFormat(buffer) else {
-                print("[VoiceToTextManager] append convert failed srcFormat=\(srcSig) frames=\(buffer.frameLength)")
+            let srcSig = Self.formatSignature(owned.format)
+            guard let chunk = self.convertToSpeechFormat(owned) else {
+                print("[VoiceToTextManager] append convert failed srcFormat=\(srcSig) frames=\(owned.frameLength)")
                 return
             }
 
@@ -184,12 +186,12 @@ final class VoiceToTextManager: @unchecked Sendable {
             self.appendCount += 1
             if self.appendCount == 1 {
                 print(
-                    "[VoiceToTextManager] first buffer appended srcFormat=\(srcSig) -> 16k mono float framesIn=\(buffer.frameLength) framesOut=\(chunk.frameLength) rms=\(String(format: "%.5f", rms)) speaking=\(speaking)"
+                    "[VoiceToTextManager] first buffer appended srcFormat=\(srcSig) -> 16k mono float framesIn=\(owned.frameLength) framesOut=\(chunk.frameLength) rms=\(String(format: "%.5f", rms)) speaking=\(speaking)"
                 )
             } else if self.appendCount % 200 == 0 || now - self.lastAppendLogAt >= 5 {
                 self.lastAppendLogAt = now
                 print(
-                    "[VoiceToTextManager] append heartbeat count=\(self.appendCount) framesIn=\(buffer.frameLength) rms=\(String(format: "%.5f", rms)) speaking=\(speaking)"
+                    "[VoiceToTextManager] append heartbeat count=\(self.appendCount) framesIn=\(owned.frameLength) rms=\(String(format: "%.5f", rms)) speaking=\(speaking)"
                 )
             }
         }

@@ -116,6 +116,15 @@ final class ConversationViewModel {
             self?.speech.append(buffer)
         }
         lastEnergySpeaking = nil
+        if captionTranslation.correctUsingFluidAudio {
+            Task.detached(priority: .utility) {
+                do {
+                    try await FluidAudioBubbleTranscriber.shared.preloadModels()
+                } catch {
+                    print("[ConversationViewModel] FluidAudio preload failed: \(error.localizedDescription)")
+                }
+            }
+        }
         print(
             "[ConversationViewModel] bindToRecorder live tap wired locale=\(locale.identifier) (onLiveBuffer -> speech.append; UI debounced)"
         )
@@ -288,13 +297,18 @@ final class ConversationViewModel {
         let row = state.history[idx]
         let rowText = row.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let inflight = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fluid = row.fluidAudioText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Fluid re-transcription often drops Apple ASR preamble; translation is keyed by turnID + fluid text.
         let pairOK =
             rowText == inflight
+            || (!fluid.isEmpty && fluid == inflight)
             || TranscriptTurnMatch.likelySameTurn(committed: rowText, inflight: inflight)
             || TranscriptTurnMatch.likelySameTurnLenient(committed: rowText, inflight: inflight)
+            || (!fluid.isEmpty && TranscriptTurnMatch.likelySameTurn(committed: fluid, inflight: inflight))
+            || (!fluid.isEmpty && TranscriptTurnMatch.likelySameTurnLenient(committed: fluid, inflight: inflight))
         guard pairOK else {
             print(
-                "[ConversationViewModel] mergeCaption skipped — inflight transcript does not pair with row text turnID=\(turnID) rowChars=\(rowText.count) inflightChars=\(inflight.count)"
+                "[ConversationViewModel] mergeCaption skipped — inflight transcript does not pair with row text turnID=\(turnID) rowChars=\(rowText.count) inflightChars=\(inflight.count) fluidChars=\(fluid.count)"
             )
             return
         }

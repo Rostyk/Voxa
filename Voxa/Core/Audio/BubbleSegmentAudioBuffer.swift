@@ -20,17 +20,19 @@ final class BubbleSegmentAudioBuffer: @unchecked Sendable {
 
     func append(_ buffer: AVAudioPCMBuffer) {
         guard buffer.frameLength > 0 else { return }
+        // Tap IO uses bufferListNoCopy — copy before async work or convert UAFs when the call ends.
+        guard let owned = buffer.voxaOwnedCopy() else { return }
         queue.async { [weak self] in
             guard let self else { return }
             if self.samples.isEmpty {
-                let estimated = Int(Double(buffer.frameLength) * 16_000.0 / buffer.format.sampleRate) + 4096
+                let estimated = Int(Double(owned.frameLength) * 16_000.0 / owned.format.sampleRate) + 4096
                 self.samples.reserveCapacity(estimated)
             }
-            if !self.tapConverter.appendTapBuffer(buffer, into: &self.samples) {
+            if !self.tapConverter.appendTapBuffer(owned, into: &self.samples) {
                 self.appendFailures += 1
                 if self.appendFailures == 1 || self.appendFailures % 50 == 0 {
                     print(
-                        "[BubbleAudio] append convert failed count=\(self.appendFailures) framesIn=\(buffer.frameLength) format=\(buffer.format.sampleRate)Hz ch=\(buffer.format.channelCount)"
+                        "[BubbleAudio] append convert failed count=\(self.appendFailures) framesIn=\(owned.frameLength) format=\(owned.format.sampleRate)Hz ch=\(owned.format.channelCount)"
                     )
                 }
             }

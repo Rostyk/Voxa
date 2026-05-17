@@ -35,12 +35,8 @@ private struct TranscriptScrollCard: View {
                                 .id(turn.id)
                         }
                         if !state.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            LiveSttAndTranslationColumn(
-                                speakerLabel: ConversationViewModel.speakerLabel,
-                                rawTranscript: state.liveTranscript,
-                                caption: model.captionTranslation
-                            )
-                            .id("live")
+                            livePartialBubble(rawTranscript: state.liveTranscript)
+                                .id("live")
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }
@@ -79,7 +75,32 @@ private struct TranscriptScrollCard: View {
         .background(Capsule().fill(Color.primary.opacity(0.05)))
     }
 
+    private func livePartialBubble(rawTranscript: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(ConversationViewModel.speakerLabel)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+
+            Text(rawTranscript)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.accentColor.opacity(0.08))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 1)
+        }
+    }
+
     private func committedTurnBubble(turn: ConversationTurn, speechLocaleIdentifier: String) -> some View {
+        let fluid = turn.fluidAudioText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let transcript = fluid.isEmpty ? turn.text : fluid
         let translation = turn.gptTranslation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         return VStack(alignment: .leading, spacing: 6) {
@@ -87,16 +108,10 @@ private struct TranscriptScrollCard: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Color.secondary)
 
-            Text(turn.text)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            if let fluid = turn.fluidAudioText?.trimmingCharacters(in: .whitespacesAndNewlines), !fluid.isEmpty {
-                Text(fluid)
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.yellow)
+            if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(transcript)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if turn.isAwaitingFluidAudio {
@@ -130,102 +145,5 @@ private struct TranscriptScrollCard: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
         }
-    }
-}
-
-/// STT text comes from conversation state; translation UI is a **nested** subtree that subscribes only to `caption`.
-private struct LiveSttAndTranslationColumn: View {
-    let speakerLabel: String
-    let rawTranscript: String
-    let caption: CaptionTranslationViewModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            liveRawBubble(label: speakerLabel, rawTranscript: rawTranscript)
-            LiveTranslationPanel(caption: caption)
-        }
-    }
-
-    private func liveRawBubble(label: String, rawTranscript: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-
-            Text(rawTranscript)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(12)
-        .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.accentColor.opacity(0.08))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 1)
-        }
-    }
-}
-
-/// Only this view reads `caption` published fields — translation churn does not rebuild the STT bubble above.
-private struct LiveTranslationPanel: View {
-    let caption: CaptionTranslationViewModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Translation")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            if caption.isTranslating && caption.liveTranslation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Translating…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            let corrected = caption.liveCorrected.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !corrected.isEmpty {
-                Text(corrected)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            let t = caption.liveTranslation.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !t.isEmpty {
-                Text(t)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if let err = caption.translationLastError?.trimmingCharacters(in: .whitespacesAndNewlines), !err.isEmpty {
-                Text(err)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.secondary.opacity(0.08))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Live translation")
     }
 }

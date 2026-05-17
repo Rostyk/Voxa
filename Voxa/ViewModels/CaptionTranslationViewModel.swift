@@ -17,7 +17,7 @@ final class CaptionTranslationViewModel {
     }
 
     /// When enabled, translation uses FluidAudio’s bubble re-transcription instead of Apple’s committed line.
-    var correctUsingFluidAudio: Bool = false
+    var correctUsingFluidAudio: Bool = true
 
     /// Default is **ChatGPT** (correction + translation + call-goal actions in one call).
     var translationEngine: LiveCaptionTranslationEngine {
