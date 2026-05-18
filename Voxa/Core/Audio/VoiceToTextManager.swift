@@ -60,8 +60,6 @@ final class VoiceToTextManager: @unchecked Sendable {
         self.recognitionLocale = Locale.current
     }
 
-    /// Updates the session locale. If recognition is running, tears down the current task and starts a fresh chain
-    /// so the tap keeps feeding audio without calling `stop` / `start` at the view-model layer.
     func applyRecognitionLocale(_ locale: Locale) {
         speechQueue.async { [weak self] in
             guard let self else { return }

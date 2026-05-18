@@ -19,7 +19,7 @@ actor FluidAudioBubbleTranscriber {
     }
 
     /// Transcribes pre-resampled 16 kHz mono bubble audio. Each call uses a new `TdtDecoderState` (no cross-bubble context).
-    func transcribe(samples: [Float]) async throws -> String {
+    func transcribe(samples: [Float]) async throws -> FluidBubbleTranscription {
         let wallStart = CFAbsoluteTimeGetCurrent()
         let durationSec = Double(samples.count) / 16_000.0
         print(
@@ -33,7 +33,7 @@ actor FluidAudioBubbleTranscriber {
             print(
                 "[FluidAudio] transcribeBubble SKIP — audio shorter than minimum (\(samples.count) < \(minimum))"
             )
-            return ""
+            return FluidBubbleTranscription(text: "", tokenTimings: [])
         }
 
         let decoderLayers = await manager.decoderLayerCount
@@ -45,11 +45,46 @@ actor FluidAudioBubbleTranscriber {
         let result = try await manager.transcribe(samples, decoderState: &decoderState)
         let asrMs = (CFAbsoluteTimeGetCurrent() - asrWall) * 1000
         let totalMs = (CFAbsoluteTimeGetCurrent() - wallStart) * 1000
+        logASRResult(result, audioDurationSec: durationSec)
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let timings = Self.mapTokenTimings(result.tokenTimings ?? [])
         print(
-            "[FluidAudio] transcribeBubble DONE wall=\(String(format: "%.0f", totalMs))ms asr=\(String(format: "%.0f", asrMs))ms modelReported=\(String(format: "%.0f", result.processingTime * 1000))ms chars=\(text.count) rtfx=\(String(format: "%.2f", result.rtfx))"
+            "[FluidAudio] transcribeBubble DONE wall=\(String(format: "%.0f", totalMs))ms asr=\(String(format: "%.0f", asrMs))ms modelReported=\(String(format: "%.0f", result.processingTime * 1000))ms chars=\(text.count) tokenTimings=\(timings.count) rtfx=\(String(format: "%.2f", result.rtfx))"
         )
-        return text
+        return FluidBubbleTranscription(text: text, tokenTimings: timings)
+    }
+
+    private static func mapTokenTimings(_ timings: [TokenTiming]) -> [VoxaTokenTiming] {
+        timings.map { t in
+            VoxaTokenTiming(token: t.token, startTimeSeconds: Float(t.startTime), endTimeSeconds: Float(t.endTime))
+        }
+    }
+
+    /// Parakeet `ASRResult` is text + optional per-token timings — no speaker / diarization fields.
+    /// Speaker labels require FluidAudio's separate `DiarizerManager` / Sortformer path (not wired in Voxa).
+    private func logASRResult(_ result: ASRResult, audioDurationSec: Double) {
+        let timings = result.tokenTimings ?? []
+        print(
+            "[FluidAudio] ASRResult fields: textChars=\(result.text.count) confidence=\(String(format: "%.3f", result.confidence)) audioDuration=\(String(format: "%.2f", audioDurationSec))s processingTime=\(String(format: "%.3f", result.processingTime))s tokenTimings=\(timings.count) speakerInfo=none (ASR-only)"
+        )
+        if !timings.isEmpty {
+            let first = timings[0]
+            let last = timings[timings.count - 1]
+            print(
+                "[FluidAudio] ASRResult tokenTimings sample: first='\(Self.tokenPreview(first.token))' @\(String(format: "%.2f", first.startTime))-\(String(format: "%.2f", first.endTime))s last='\(Self.tokenPreview(last.token))' @\(String(format: "%.2f", last.startTime))-\(String(format: "%.2f", last.endTime))s (no speakerId on TokenTiming)"
+            )
+        }
+        if result.ctcDetectedTerms?.isEmpty == false || result.ctcAppliedTerms?.isEmpty == false {
+            print(
+                "[FluidAudio] ASRResult CTC vocabulary: detected=\(result.ctcDetectedTerms?.count ?? 0) applied=\(result.ctcAppliedTerms?.count ?? 0)"
+            )
+        }
+    }
+
+    private static func tokenPreview(_ token: String, maxLen: Int = 24) -> String {
+        let t = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.count <= maxLen { return t }
+        return String(t.prefix(maxLen)) + "…"
     }
 
     private func loadedManager() async throws -> AsrManager {
@@ -70,7 +105,7 @@ actor FluidAudioBubbleTranscriber {
         let task = Task<Void, Error> {
             let createdWall = CFAbsoluteTimeGetCurrent()
             print(
-                "[FluidAudio] AsrManager instance CREATE ts=\(WallClockLog.iso(createdWall)) (shared singleton)"
+                "[FluidAudio] AsrManager instance CREATE ts=\(WallClockLog.iso(createdWall)) (Parakeet ASR; diarization via DiarizerManager on commit)"
             )
             let manager = AsrManager()
             self.asrManager = manager

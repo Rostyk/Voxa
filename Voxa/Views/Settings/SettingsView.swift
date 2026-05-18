@@ -173,8 +173,33 @@ private struct SpeechTranslationSettingsBlock: View {
                             do {
                                 try await FluidAudioBubbleTranscriber.shared.preloadModels()
                             } catch {
-                                print("[Caption] FluidAudio preload failed: \(error.localizedDescription)")
+                                print("[Caption] FluidAudio STT preload failed: \(error.localizedDescription)")
                             }
+                            if caption.diarizeSpeakersOnCommit {
+                                do {
+                                    try await FluidAudioBubbleDiarizer.shared.preloadModels()
+                                } catch {
+                                    print("[Caption] FluidAudio diarizer preload failed: \(error.localizedDescription)")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Toggle(isOn: $caption.diarizeSpeakersOnCommit) {
+                    Text("Speaker diarization (FluidAudio)")
+                        .font(.body)
+                }
+                .toggleStyle(.checkbox)
+                .disabled(!caption.correctUsingFluidAudio)
+                .onChange(of: caption.diarizeSpeakersOnCommit) { _, enabled in
+                    conversationViewModel.applySpeakerDiarizationSetting(enabled)
+                    guard enabled, caption.correctUsingFluidAudio else { return }
+                    Task.detached(priority: .utility) {
+                        do {
+                            try await FluidAudioBubbleDiarizer.shared.preloadModels()
+                        } catch {
+                            print("[Caption] FluidAudio diarizer preload failed: \(error.localizedDescription)")
                         }
                     }
                 }

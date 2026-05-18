@@ -18,6 +18,8 @@ final class ConversationViewModel {
     @ObservationIgnored private let bubbleAudio = BubbleSegmentAudioBuffer()
     @ObservationIgnored private var lastEnergySpeaking: Bool?
     @ObservationIgnored private let speechUI = SpeechUIBridge()
+    @ObservationIgnored private var liveDiarizationGeneration: UInt64 = 0
+    @ObservationIgnored private var liveDiarizationInFlight = false
 
     /// Locales supported for dictation-style speech on this Mac (same pool as `SFSpeechRecognizer`).
     static func supportedSpeechLocaleIdentifiers() -> [String] {
@@ -34,6 +36,8 @@ final class ConversationViewModel {
         state = ConversationState(
             history: [],
             liveTranscript: "",
+            liveSpeakerSegments: nil,
+            liveBubbleAudioSeconds: 0,
             isSpeakerSpeaking: false,
             isSilent: true,
             speechAuthorized: false,
@@ -50,6 +54,11 @@ final class ConversationViewModel {
                 actions: actions
             )
         }
+    }
+
+    /// Settings flag: speaker diarization UI + FluidAudio `DiarizerManager` (off by default).
+    var speakerDiarizationEnabled: Bool {
+        captionTranslation.diarizeSpeakersOnCommit
     }
 
     /// SwiftUI `Picker` binding; changing value rotates `SFSpeechRecognizer` while the tap stays live.
@@ -84,7 +93,10 @@ final class ConversationViewModel {
         recorder.onLiveBuffer = nil
         speechUI.cancelAll()
         speech.stop()
+        liveDiarizationGeneration &+= 1
+        liveDiarizationInFlight = false
         bubbleAudio.reset()
+        configureLiveDiarizationProbes()
 
         guard state.speechAuthorized else {
             var s = state
@@ -117,11 +129,19 @@ final class ConversationViewModel {
         }
         lastEnergySpeaking = nil
         if captionTranslation.correctUsingFluidAudio {
+            let preloadDiarizer = captionTranslation.diarizeSpeakersOnCommit
             Task.detached(priority: .utility) {
                 do {
                     try await FluidAudioBubbleTranscriber.shared.preloadModels()
                 } catch {
-                    print("[ConversationViewModel] FluidAudio preload failed: \(error.localizedDescription)")
+                    print("[ConversationViewModel] FluidAudio STT preload failed: \(error.localizedDescription)")
+                }
+                if preloadDiarizer {
+                    do {
+                        try await FluidAudioBubbleDiarizer.shared.preloadModels()
+                    } catch {
+                        print("[ConversationViewModel] FluidAudio diarizer preload failed: \(error.localizedDescription)")
+                    }
                 }
             }
         }
@@ -135,9 +155,13 @@ final class ConversationViewModel {
         recorder.onLiveBuffer = nil
         speechUI.cancelAll()
         speech.stop()
+        clearLiveDiarizationState()
+        bubbleAudio.onLiveDiarizationInterval = nil
         bubbleAudio.reset()
         var s = state
         s.liveTranscript = ""
+        s.liveSpeakerSegments = nil
+        s.liveBubbleAudioSeconds = 0
         s.isSpeakerSpeaking = false
         s.isSilent = true
         state = s
@@ -146,13 +170,110 @@ final class ConversationViewModel {
 
     func clearConversation() {
         print("[ConversationViewModel] clearConversation")
+        clearLiveDiarizationState()
         bubbleAudio.reset()
         speechUI.cancelAll()
         var s = state
         s.history = []
         s.liveTranscript = ""
+        s.liveSpeakerSegments = nil
+        s.liveBubbleAudioSeconds = 0
         state = s
         captionTranslation.onConversationCleared()
+    }
+
+    /// Call when the settings checkbox toggles (clears live UI or wires 10 s probes while recording).
+    func applySpeakerDiarizationSetting(_ enabled: Bool) {
+        if enabled {
+            configureLiveDiarizationProbes()
+        } else {
+            bubbleAudio.onLiveDiarizationInterval = nil
+            clearLiveDiarizationState()
+        }
+    }
+
+    private func configureLiveDiarizationProbes() {
+        guard speakerDiarizationEnabled else {
+            bubbleAudio.onLiveDiarizationInterval = nil
+            return
+        }
+        bubbleAudio.onLiveDiarizationInterval = { [weak self] in
+            Task { @MainActor in
+                self?.runLiveDiarizationProbe()
+            }
+        }
+    }
+
+    private func clearLiveDiarizationState() {
+        liveDiarizationGeneration &+= 1
+        liveDiarizationInFlight = false
+        var s = state
+        s.liveSpeakerSegments = nil
+        s.liveBubbleAudioSeconds = 0
+        state = s
+    }
+
+    /// Diarization-only on the in-progress bubble (~every 10 s). Does not commit or run Parakeet STT.
+    private func runLiveDiarizationProbe() {
+        guard speakerDiarizationEnabled else { return }
+        guard captionTranslation.correctUsingFluidAudio, speakerDiarizationEnabled else { return }
+        guard !liveDiarizationInFlight else {
+            print("[ConversationViewModel] live diarization probe skipped — previous probe in flight")
+            return
+        }
+
+        let samples = bubbleAudio.peekSnapshot()
+        let audioSec = Float(samples.count) / Float(BubbleSegmentAudioBuffer.sampleRate)
+        guard samples.count >= FluidAudioBubbleDiarizer.minimumSamplesForProbe else {
+            print(
+                "[ConversationViewModel] live diarization probe skipped — audio too short samples=\(samples.count)"
+            )
+            return
+        }
+
+        liveDiarizationInFlight = true
+        let generation = liveDiarizationGeneration
+        print(
+            "[ConversationViewModel] live diarization probe START gen=\(generation) samples=\(samples.count) ≈\(String(format: "%.2f", audioSec))s"
+        )
+
+        Task.detached(priority: .utility) { [weak self] in
+            let segments: [SpeakerDiarizationSegment]
+            do {
+                segments = try await FluidAudioBubbleDiarizer.shared.diarize(
+                    samples: samples,
+                    pass: .liveProbe
+                )
+            } catch {
+                print(
+                    "[ConversationViewModel] live diarization probe failed gen=\(generation): \(error.localizedDescription)"
+                )
+                await MainActor.run {
+                    guard let self else { return }
+                    if generation == self.liveDiarizationGeneration {
+                        self.liveDiarizationInFlight = false
+                    }
+                }
+                return
+            }
+
+            await MainActor.run {
+                guard let self else { return }
+                self.liveDiarizationInFlight = false
+                guard generation == self.liveDiarizationGeneration else {
+                    print("[ConversationViewModel] live diarization probe discarded — stale gen=\(generation)")
+                    return
+                }
+                var s = self.state
+                s.liveSpeakerSegments = segments.isEmpty ? nil : segments
+                s.liveBubbleAudioSeconds = audioSec
+                self.state = s
+                let unique = Set(segments.map(\.speakerId)).count
+                print(
+                    "[ConversationViewModel] live diarization probe DONE gen=\(generation) segments=\(segments.count) uniqueSpeakers=\(unique)"
+                )
+            }
+        }
     }
 
     fileprivate func applyPartial(_ text: String) {
@@ -167,13 +288,20 @@ final class ConversationViewModel {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
+        if speakerDiarizationEnabled {
+            clearLiveDiarizationState()
+        }
+
         let audioSnapshot = bubbleAudio.takeSnapshotAndReset()
         let useFluid = captionTranslation.correctUsingFluidAudio
+        let useDiarization = useFluid && captionTranslation.diarizeSpeakersOnCommit
         let turn = ConversationTurn(
             speakerLabel: Self.speakerLabel,
             text: trimmed,
             fluidAudioText: nil,
             isAwaitingFluidAudio: useFluid,
+            speakerSegments: nil,
+            isAwaitingDiarization: useDiarization,
             gptCorrected: nil,
             gptTranslation: nil
         )
@@ -183,18 +311,21 @@ final class ConversationViewModel {
             s.history.removeFirst(s.history.count - Self.maxHistoryTurns)
         }
         s.liveTranscript = ""
+        s.liveSpeakerSegments = nil
+        s.liveBubbleAudioSeconds = 0
         s.isSilent = !s.isSpeakerSpeaking
         state = s
         let audioSec = Double(audioSnapshot.count) / 16_000.0
         print(
-            "[ConversationViewModel] applyCommit historyCount=\(s.history.count) appleChars=\(trimmed.count) fluid=\(useFluid) audioSamples=\(audioSnapshot.count) ≈\(String(format: "%.2f", audioSec))s \(Self.commitLogPreview(trimmed))"
+            "[ConversationViewModel] applyCommit historyCount=\(s.history.count) appleChars=\(trimmed.count) fluid=\(useFluid) diarize=\(useDiarization) audioSamples=\(audioSnapshot.count) ≈\(String(format: "%.2f", audioSec))s \(Self.commitLogPreview(trimmed))"
         )
 
         if useFluid {
             scheduleFluidAudioThenTranslate(
                 turnID: turn.id,
                 appleTranscript: trimmed,
-                audioSnapshot: audioSnapshot
+                audioSnapshot: audioSnapshot,
+                runDiarization: useDiarization
             )
         } else {
             captionTranslation.onSegmentCommitted(lateCaptionTurnID: turn.id, committedTranscript: trimmed)
@@ -204,35 +335,68 @@ final class ConversationViewModel {
     private func scheduleFluidAudioThenTranslate(
         turnID: UUID,
         appleTranscript: String,
-        audioSnapshot: [Float]
+        audioSnapshot: [Float],
+        runDiarization: Bool
     ) {
         let sessionGen = captionTranslation.translationSessionGenerationSnapshot()
         Task.detached(priority: .userInitiated) { [weak self] in
-            let fluidText: String
+            async let transcribeTask = Self.transcribeBubble(samples: audioSnapshot, turnID: turnID)
+            async let diarizeTask: [SpeakerDiarizationSegment] = runDiarization
+                ? await Self.diarizeBubble(samples: audioSnapshot, turnID: turnID)
+                : []
+
+            let transcription: FluidBubbleTranscription
             do {
-                fluidText = try await FluidAudioBubbleTranscriber.shared.transcribe(samples: audioSnapshot)
+                transcription = try await transcribeTask
             } catch {
                 print(
                     "[ConversationViewModel] FluidAudio bubble failed turn=\(turnID): \(error.localizedDescription) — falling back to Apple transcript for translation"
                 )
+                let segments = runDiarization ? await diarizeTask : []
                 await MainActor.run {
                     self?.finishFluidAudioPath(
                         turnID: turnID,
                         appleTranscript: appleTranscript,
                         fluidText: nil,
+                        fluidTokenTimings: nil,
+                        speakerSegments: runDiarization && !segments.isEmpty ? segments : nil,
                         sessionGeneration: sessionGen
                     )
                 }
                 return
             }
+
+            let segments = runDiarization ? await diarizeTask : []
+            let tokenTimings: [VoxaTokenTiming]? =
+                runDiarization && !transcription.tokenTimings.isEmpty ? transcription.tokenTimings : nil
             await MainActor.run {
                 self?.finishFluidAudioPath(
                     turnID: turnID,
                     appleTranscript: appleTranscript,
-                    fluidText: fluidText,
+                    fluidText: transcription.text,
+                    fluidTokenTimings: tokenTimings,
+                    speakerSegments: runDiarization && !segments.isEmpty ? segments : nil,
                     sessionGeneration: sessionGen
                 )
             }
+        }
+    }
+
+    private static func transcribeBubble(samples: [Float], turnID: UUID) async throws -> FluidBubbleTranscription {
+        try await FluidAudioBubbleTranscriber.shared.transcribe(samples: samples)
+    }
+
+    private static func diarizeBubble(samples: [Float], turnID: UUID) async -> [SpeakerDiarizationSegment] {
+        do {
+            return try await FluidAudioBubbleDiarizer.shared.diarize(
+                samples: samples,
+                pass: .committedBubble
+            )
+        } catch {
+            print(
+                "[ConversationViewModel] FluidAudio diarization failed turn=\(turnID): \(error.localizedDescription)"
+            )
+            return []
         }
     }
 
@@ -240,6 +404,8 @@ final class ConversationViewModel {
         turnID: UUID,
         appleTranscript: String,
         fluidText: String?,
+        fluidTokenTimings: [VoxaTokenTiming]?,
+        speakerSegments: [SpeakerDiarizationSegment]?,
         sessionGeneration: UInt64
     ) {
         guard sessionGeneration == captionTranslation.translationSessionGenerationSnapshot() else {
@@ -250,13 +416,17 @@ final class ConversationViewModel {
         let trimmedFluid = fluidText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         updateTurnAfterFluidAudio(
             turnID: turnID,
-            fluidText: trimmedFluid.isEmpty ? nil : trimmedFluid
+            fluidText: trimmedFluid.isEmpty ? nil : trimmedFluid,
+            fluidTokenTimings: fluidTokenTimings,
+            speakerSegments: speakerSegments
         )
 
         let transcriptForTranslation =
             trimmedFluid.isEmpty ? appleTranscript : trimmedFluid
+        let segmentCount = speakerSegments?.count ?? 0
+        let uniqueSpeakers = Set(speakerSegments?.map(\.speakerId) ?? []).count
         print(
-            "[ConversationViewModel] FluidAudio → translate turn=\(turnID) fluidChars=\(trimmedFluid.count) useChars=\(transcriptForTranslation.count)"
+            "[ConversationViewModel] FluidAudio → translate turn=\(turnID) fluidChars=\(trimmedFluid.count) useChars=\(transcriptForTranslation.count) diarizationSegments=\(segmentCount) uniqueSpeakers=\(uniqueSpeakers)"
         )
         captionTranslation.onSegmentCommitted(
             lateCaptionTurnID: turnID,
@@ -264,22 +434,47 @@ final class ConversationViewModel {
         )
     }
 
-    private func updateTurnAfterFluidAudio(turnID: UUID, fluidText: String?) {
+    private func updateTurnAfterFluidAudio(
+        turnID: UUID,
+        fluidText: String?,
+        fluidTokenTimings: [VoxaTokenTiming]?,
+        speakerSegments: [SpeakerDiarizationSegment]?
+    ) {
         guard let idx = state.history.firstIndex(where: { $0.id == turnID }) else { return }
         let row = state.history[idx]
+        let label =
+            speakerDiarizationEnabled
+            ? (Self.speakerLabel(for: speakerSegments) ?? row.speakerLabel)
+            : row.speakerLabel
         var s = state
         s.history[idx] = ConversationTurn(
             id: row.id,
-            speakerLabel: row.speakerLabel,
+            speakerLabel: label,
             text: row.text,
             fluidAudioText: fluidText,
             isAwaitingFluidAudio: false,
+            speakerSegments: speakerSegments,
+            fluidTokenTimings: fluidTokenTimings,
+            isAwaitingDiarization: false,
             gptCorrected: row.gptCorrected,
             gptTranslation: row.gptTranslation,
             gptActions: row.gptActions,
             createdAt: row.createdAt
         )
         state = s
+    }
+
+    /// Header label from diarization: dominant talker, or “N speakers”.
+    private static func speakerLabel(for segments: [SpeakerDiarizationSegment]?) -> String? {
+        guard let segments, !segments.isEmpty else { return nil }
+        let unique = Set(segments.map(\.speakerId))
+        if unique.count == 1, let id = unique.first {
+            return SpeakerDiarizationSegment.displayLabel(for: id)
+        }
+        if unique.count > 1 {
+            return "\(unique.count) speakers"
+        }
+        return nil
     }
 
     /// Merges caption / translation into the history row for `turnID` (may not be the last row if several segments finish out of API order).
@@ -334,6 +529,9 @@ final class ConversationViewModel {
             text: row.text,
             fluidAudioText: row.fluidAudioText,
             isAwaitingFluidAudio: row.isAwaitingFluidAudio,
+            speakerSegments: row.speakerSegments,
+            fluidTokenTimings: row.fluidTokenTimings,
+            isAwaitingDiarization: row.isAwaitingDiarization,
             gptCorrected: mergedCorrected,
             gptTranslation: mergedTranslation,
             gptActions: mergedActions,

@@ -19,6 +19,9 @@ final class CaptionTranslationViewModel {
     /// When enabled, translation uses FluidAudio’s bubble re-transcription instead of Apple’s committed line.
     var correctUsingFluidAudio: Bool = true
 
+    /// When enabled (and Fluid STT is on), run speaker diarization (live probes + timeline on commit). Off by default.
+    var diarizeSpeakersOnCommit: Bool = false
+
     /// Default is **ChatGPT** (correction + translation + call-goal actions in one call).
     var translationEngine: LiveCaptionTranslationEngine {
         get { _translationEngine }

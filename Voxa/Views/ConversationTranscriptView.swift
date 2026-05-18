@@ -16,6 +16,7 @@ private struct TranscriptScrollCard: View {
     let model: ConversationViewModel
 
     private var state: ConversationState { model.state }
+    private var speakerDiarizationEnabled: Bool { model.speakerDiarizationEnabled }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -35,8 +36,18 @@ private struct TranscriptScrollCard: View {
                                 .id(turn.id)
                         }
                         if !state.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            livePartialBubble(rawTranscript: state.liveTranscript)
-                                .id("live")
+                            Group {
+                                if speakerDiarizationEnabled {
+                                    livePartialBubbleWithDiarization(
+                                        rawTranscript: state.liveTranscript,
+                                        liveSegments: state.liveSpeakerSegments,
+                                        liveAudioSeconds: state.liveBubbleAudioSeconds
+                                    )
+                                } else {
+                                    livePartialBubblePlain(rawTranscript: state.liveTranscript)
+                                }
+                            }
+                            .id("live")
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }
@@ -75,7 +86,7 @@ private struct TranscriptScrollCard: View {
         .background(Capsule().fill(Color.primary.opacity(0.05)))
     }
 
-    private func livePartialBubble(rawTranscript: String) -> some View {
+    private func livePartialBubblePlain(rawTranscript: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(ConversationViewModel.speakerLabel)
                 .font(.caption.weight(.semibold))
@@ -98,26 +109,90 @@ private struct TranscriptScrollCard: View {
         }
     }
 
+    private func livePartialBubbleWithDiarization(
+        rawTranscript: String,
+        liveSegments: [SpeakerDiarizationSegment]?,
+        liveAudioSeconds: Float
+    ) -> some View {
+        let liveLabel =
+            liveSegments.flatMap { SpeakerTranscriptColorizer.liveSpeakerLabel(segments: $0, audioDurationSeconds: liveAudioSeconds) }
+            ?? ConversationViewModel.speakerLabel
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(liveLabel)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+
+            if let segments = liveSegments,
+               !segments.isEmpty,
+               liveAudioSeconds > 0 {
+                SpeakerColoredTranscriptText(
+                    spans: SpeakerTranscriptColorizer.proportionalSpans(
+                        transcript: rawTranscript,
+                        speakerSegments: segments,
+                        audioDurationSeconds: liveAudioSeconds
+                    )
+                )
+            } else {
+                Text(rawTranscript)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(12)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.accentColor.opacity(0.08))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 1)
+        }
+    }
+
     private func committedTurnBubble(turn: ConversationTurn, speechLocaleIdentifier: String) -> some View {
         let fluid = turn.fluidAudioText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let transcript = fluid.isEmpty ? turn.text : fluid
         let translation = turn.gptTranslation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let diarizationReady =
+            speakerDiarizationEnabled
+            && !turn.isAwaitingDiarization
+            && !(turn.speakerSegments?.isEmpty ?? true)
 
         return VStack(alignment: .leading, spacing: 6) {
             Text(turn.speakerLabel)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Color.secondary)
 
-            if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if diarizationReady, let segments = turn.speakerSegments {
+                SpeakerDiarizationTimelineView(segments: segments)
+
+                if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    SpeakerColoredTranscriptText(
+                        spans: SpeakerTranscriptColorizer.transcriptSpans(
+                            transcript: transcript,
+                            speakerSegments: segments,
+                            tokenTimings: turn.fluidTokenTimings
+                        )
+                    )
+                }
+            } else if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(transcript)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-            } else if turn.isAwaitingFluidAudio {
+            } else if turn.isAwaitingFluidAudio
+                || (speakerDiarizationEnabled && turn.isAwaitingDiarization) {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Refining with FluidAudio…")
+                    Text(
+                        speakerDiarizationEnabled && turn.isAwaitingDiarization
+                            ? "Detecting speakers…"
+                            : "Refining with FluidAudio…"
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

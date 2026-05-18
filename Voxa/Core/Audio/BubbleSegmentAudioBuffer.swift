@@ -5,16 +5,26 @@ import Foundation
 /// Resampling happens incrementally on each tap so commit is an O(1) handoff to FluidAudio.
 final class BubbleSegmentAudioBuffer: @unchecked Sendable {
 
+    /// Interval for live diarization probes (matches FluidAudio `DiarizerManager` chunk duration).
+    static let liveDiarizationIntervalSeconds: Float = 10
+    static let sampleRate = 16_000
+    static let samplesPerLiveDiarizationInterval = Int(Float(sampleRate) * liveDiarizationIntervalSeconds)
+
+    /// Fired on the buffer queue when accumulated audio crosses another 10 s boundary — does not end the bubble.
+    var onLiveDiarizationInterval: (@Sendable () -> Void)?
+
     private let queue = DispatchQueue(label: "com.voxa.bubbleSegmentAudio", qos: .userInitiated)
     private let tapConverter = TapTo16kMonoConverter()
     private var samples: [Float] = []
     private var appendFailures = 0
+    private var notifiedChunkCount = 0
 
     func reset() {
         queue.sync {
             samples.removeAll(keepingCapacity: true)
             tapConverter.reset()
             appendFailures = 0
+            notifiedChunkCount = 0
         }
     }
 
@@ -35,7 +45,28 @@ final class BubbleSegmentAudioBuffer: @unchecked Sendable {
                         "[BubbleAudio] append convert failed count=\(self.appendFailures) framesIn=\(owned.frameLength) format=\(owned.format.sampleRate)Hz ch=\(owned.format.channelCount)"
                     )
                 }
+            } else {
+                self.notifyLiveDiarizationIntervalsIfNeeded()
             }
+        }
+    }
+
+    private func notifyLiveDiarizationIntervalsIfNeeded() {
+        guard onLiveDiarizationInterval != nil else { return }
+        let intervalCount = samples.count / Self.samplesPerLiveDiarizationInterval
+        guard intervalCount > notifiedChunkCount else { return }
+        notifiedChunkCount = intervalCount
+        let durationSec = Double(samples.count) / Double(Self.sampleRate)
+        print(
+            "[BubbleAudio] live diarization interval #\(intervalCount) samples=\(samples.count) ≈\(String(format: "%.2f", durationSec))s (bubble continues)"
+        )
+        onLiveDiarizationInterval?()
+    }
+
+    /// Copy of audio accumulated for the current bubble (does not clear — for live diarization probes).
+    func peekSnapshot() -> [Float] {
+        queue.sync {
+            Array(samples)
         }
     }
 
@@ -48,7 +79,8 @@ final class BubbleSegmentAudioBuffer: @unchecked Sendable {
             tapConverter.reset()
             let failures = appendFailures
             appendFailures = 0
-            let durationSec = Double(snapshot.count) / 16_000.0
+            notifiedChunkCount = 0
+            let durationSec = Double(snapshot.count) / Double(Self.sampleRate)
             print(
                 "[BubbleAudio] snapshot samples=\(snapshot.count) ≈\(String(format: "%.2f", durationSec))s convertFailures=\(failures)"
             )
