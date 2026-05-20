@@ -20,6 +20,9 @@ final class ConversationViewModel {
     @ObservationIgnored private let speechUI = SpeechUIBridge()
     @ObservationIgnored private var liveDiarizationGeneration: UInt64 = 0
     @ObservationIgnored private var liveDiarizationInFlight = false
+    @ObservationIgnored private var activeCallSession: CallHistorySession?
+    @ObservationIgnored private var endedCallSession: CallHistorySession?
+    @ObservationIgnored private var endedCallGeneratedTitle: String?
 
     /// Locales supported for dictation-style speech on this Mac (same pool as `SFSpeechRecognizer`).
     static func supportedSpeechLocaleIdentifiers() -> [String] {
@@ -90,6 +93,7 @@ final class ConversationViewModel {
 
     func bindToRecorder(_ recorder: CallAudioRecorder) {
         print("[ConversationViewModel] bindToRecorder enter speechAuthorized=\(state.speechAuthorized)")
+        beginCallHistorySessionIfNeeded()
         recorder.onLiveBuffer = nil
         speechUI.cancelAll()
         speech.stop()
@@ -165,7 +169,8 @@ final class ConversationViewModel {
         s.isSpeakerSpeaking = false
         s.isSilent = true
         state = s
-        captionTranslation.onStoppedListening()
+        captionTranslation.onStoppedListening(preserveCommittedTranslations: true)
+        endCallHistorySessionIfNeeded()
     }
 
     func clearConversation() {
@@ -211,6 +216,7 @@ final class ConversationViewModel {
         s.liveSpeakerSegments = nil
         s.liveBubbleAudioSeconds = 0
         state = s
+        persistEndedCallSnapshotIfNeeded(reason: "fluid audio")
     }
 
     /// Diarization-only on the in-progress bubble (~every 10 s). Does not commit or run Parakeet STT.
@@ -330,6 +336,7 @@ final class ConversationViewModel {
         } else {
             captionTranslation.onSegmentCommitted(lateCaptionTurnID: turn.id, committedTranscript: trimmed)
         }
+        persistEndedCallSnapshotIfNeeded(reason: "late commit")
     }
 
     private func scheduleFluidAudioThenTranslate(
@@ -541,6 +548,7 @@ final class ConversationViewModel {
         print(
             "[ConversationViewModel] mergeCaptionIntoTurn turnID=\(turnID) rowIndex=\(idx) transcriptChars=\(transcript.count) hadTranslation=\(row.gptTranslation != nil) actions=\(mergedActions.count)"
         )
+        persistEndedCallSnapshotIfNeeded(reason: "translation merge")
     }
 
     private static func commitLogPreview(_ text: String, maxLen: Int = 64) -> String {
@@ -548,6 +556,139 @@ final class ConversationViewModel {
         if t.count <= maxLen { return "preview=\"\(t)\"" }
         let idx = t.index(t.startIndex, offsetBy: maxLen)
         return "preview=\"\(t[..<idx])…\""
+    }
+
+    private func beginCallHistorySessionIfNeeded() {
+        guard activeCallSession == nil else { return }
+
+        let previousHistoryCount = state.history.count
+        let previousLiveChars = state.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).count
+        activeCallSession = CallHistorySession(id: UUID(), startedAt: Date())
+        endedCallSession = nil
+        endedCallGeneratedTitle = nil
+
+        if !state.history.isEmpty || !state.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            var s = state
+            s.history = []
+            s.liveTranscript = ""
+            s.liveSpeakerSegments = nil
+            s.liveBubbleAudioSeconds = 0
+            state = s
+        }
+        captionTranslation.onConversationCleared()
+        print(
+            "[History] call session started id=\(activeCallSession?.id.uuidString ?? "(nil)") startedAt=\(activeCallSession?.startedAt.description ?? "(nil)") clearedPreviousTurns=\(previousHistoryCount) clearedLiveChars=\(previousLiveChars)"
+        )
+    }
+
+    private func endCallHistorySessionIfNeeded() {
+        guard let session = activeCallSession else { return }
+        activeCallSession = nil
+        let endedAt = Date()
+        endedCallSession = CallHistorySession(id: session.id, startedAt: session.startedAt, endedAt: endedAt)
+        print(
+            "[History] call session ended id=\(session.id) startedAt=\(session.startedAt) endedAt=\(endedAt) duration=\(String(format: "%.2f", endedAt.timeIntervalSince(session.startedAt)))s currentTurns=\(state.history.count)"
+        )
+        saveEndedCallSnapshot(reason: "call ended")
+        requestGeneratedTitleForEndedCall()
+    }
+
+    private func persistEndedCallSnapshotIfNeeded(reason: String) {
+        guard endedCallSession != nil else {
+            print("[History] snapshot skip reason=\(reason) — no ended session")
+            return
+        }
+        saveEndedCallSnapshot(reason: reason)
+    }
+
+    private func saveEndedCallSnapshot(reason: String) {
+        guard let session = endedCallSession else { return }
+        let record = makeCallHistoryRecord(
+            session: session,
+            generatedTitle: endedCallGeneratedTitle
+        )
+        guard !record.turns.isEmpty else {
+            print("[History] skip save \(reason) — no bubbles")
+            return
+        }
+        CallHistoryStore.shared.upsert(record)
+        print(
+            "[History] snapshot saved reason=\(reason) id=\(record.id) turns=\(record.turns.count) translatedTurns=\(record.turns.filter { ($0.gptTranslation ?? "").isEmpty == false }.count) fluidTurns=\(record.turns.filter { ($0.fluidAudioText ?? "").isEmpty == false }.count) actions=\(record.turns.reduce(0) { $0 + $1.gptActions.count }) generatedTitle=\"\(record.generatedTitle ?? "")\""
+        )
+    }
+
+    private func requestGeneratedTitleForEndedCall() {
+        guard let session = endedCallSession else { return }
+        let sessionID = session.id
+
+        print("[HistoryTitle] schedule title generation id=\(sessionID) delayMs=1500")
+        Task { [weak self] in
+            // Speech can flush a final committed bubble just after the tap stops.
+            try? await Task.sleep(for: .milliseconds(1_500))
+            guard let self else { return }
+            guard self.endedCallSession?.id == sessionID else {
+                print("[HistoryTitle] cancel title generation id=\(sessionID) — ended session changed")
+                return
+            }
+
+            let record = self.makeCallHistoryRecord(
+                session: session,
+                generatedTitle: self.endedCallGeneratedTitle
+            )
+            guard !record.turns.isEmpty else {
+                print("[HistoryTitle] skip title generation id=\(sessionID) — no turns after delay")
+                return
+            }
+            print(
+                "[HistoryTitle] begin title generation id=\(record.id) turns=\(record.turns.count) translatedTurns=\(record.turns.filter { ($0.gptTranslation ?? "").isEmpty == false }.count)"
+            )
+            guard let title = await CallTitleGenerator.generateTitle(for: record) else {
+                print("[HistoryTitle] no generated title id=\(record.id)")
+                return
+            }
+            guard self.endedCallSession?.id == record.id else {
+                print("[HistoryTitle] discard generated title id=\(record.id) — ended session changed")
+                return
+            }
+            self.endedCallGeneratedTitle = title
+            print("[HistoryTitle] apply generated title id=\(record.id) title=\"\(title)\"")
+            self.saveEndedCallSnapshot(reason: "generated title")
+        }
+    }
+
+    private func makeCallHistoryRecord(
+        session: CallHistorySession,
+        generatedTitle: String?
+    ) -> CallHistoryRecord {
+        CallHistoryRecord(
+            id: session.id,
+            startedAt: session.startedAt,
+            endedAt: session.endedAt ?? Date(),
+            manualTitle: nil,
+            generatedTitle: generatedTitle,
+            speechLocaleIdentifier: state.speechLocaleIdentifier,
+            translationLocaleIdentifier: captionTranslation.translationLocaleIdentifier,
+            translationEngine: captionTranslation.translationEngine,
+            callGoal: captionTranslation.callGoal,
+            turns: state.history.map(Self.finishedHistoryTurn)
+        )
+    }
+
+    private static func finishedHistoryTurn(_ turn: ConversationTurn) -> ConversationTurn {
+        ConversationTurn(
+            id: turn.id,
+            speakerLabel: turn.speakerLabel,
+            text: turn.text,
+            fluidAudioText: turn.fluidAudioText,
+            isAwaitingFluidAudio: false,
+            speakerSegments: turn.speakerSegments,
+            fluidTokenTimings: turn.fluidTokenTimings,
+            isAwaitingDiarization: false,
+            gptCorrected: turn.gptCorrected,
+            gptTranslation: turn.gptTranslation,
+            gptActions: turn.gptActions,
+            createdAt: turn.createdAt
+        )
     }
 
     fileprivate func applyEnergy(_ speaking: Bool) {
@@ -561,6 +702,12 @@ final class ConversationViewModel {
         s.isSilent = empty && !speaking
         state = s
     }
+}
+
+private struct CallHistorySession {
+    let id: UUID
+    let startedAt: Date
+    var endedAt: Date?
 }
 
 // MARK: - Debounced speech → MainActor UI

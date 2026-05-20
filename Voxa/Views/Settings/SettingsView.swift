@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var conversationViewModel: ConversationViewModel
+    @Bindable var callViewModel: CallViewModel
 
     @State private var virtualMicStatus = VoxaVirtualMicFeederStatus.shared
     @State private var virtualMicTestMessage: String?
@@ -13,6 +14,8 @@ struct SettingsView: View {
                     .font(.title2.weight(.semibold))
 
                 SpeechTranslationSettingsBlock(conversationViewModel: conversationViewModel)
+
+                CallDetectionSettingsBlock(callViewModel: callViewModel)
 
                 virtualMicSection
 
@@ -116,6 +119,37 @@ struct SettingsView: View {
         Circle()
             .fill(color)
             .frame(width: 10, height: 10)
+    }
+}
+
+// MARK: - Call detection (temporary Zoom workaround)
+
+private struct CallDetectionSettingsBlock: View {
+    @Bindable var callViewModel: CallViewModel
+
+    var body: some View {
+        SettingsSectionCard(
+            title: "Call detection",
+            systemImage: "phone.connection"
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle(isOn: $callViewModel.excludeZoomFromCallDetection) {
+                    Text("Exclude Zoom from call detection and audio tap")
+                        .font(.body)
+                }
+                .toggleStyle(.checkbox)
+                .onChange(of: callViewModel.excludeZoomFromCallDetection) { _, _ in
+                    callViewModel.applyExcludeZoomFromCallDetectionSetting()
+                }
+
+                Text(
+                    "Temporary: when enabled, Zoom is not treated as a call app and its output is omitted from the system audio tap. Remove this option when Zoom support is ready."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 

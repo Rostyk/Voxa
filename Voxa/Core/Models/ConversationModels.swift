@@ -1,7 +1,7 @@
 import Foundation
 
 /// One committed line after a pause (treated like a chat message).
-struct ConversationTurn: Identifiable, Hashable, Sendable {
+struct ConversationTurn: Identifiable, Hashable, Codable, Sendable {
     let id: UUID
     let speakerLabel: String
     /// Raw committed transcript from Apple speech recognition.

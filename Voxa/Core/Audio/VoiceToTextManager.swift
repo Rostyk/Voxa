@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Speech
+import VoxaSDK
 
 /// Streams tap `AVAudioPCMBuffer` into `SFSpeechAudioBufferRecognitionRequest` (Apple’s live pattern:
 /// `append(_:)` + partial results). Bubble boundaries use **real audio silence** plus partial quiet,

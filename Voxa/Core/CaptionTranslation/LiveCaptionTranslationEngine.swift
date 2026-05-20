@@ -1,7 +1,7 @@
 import Foundation
 
 /// Which backend produces live caption correction + translation.
-enum LiveCaptionTranslationEngine: String, CaseIterable, Identifiable, Sendable {
+enum LiveCaptionTranslationEngine: String, CaseIterable, Identifiable, Codable, Sendable {
     case gpt
     case googleTranslate
 

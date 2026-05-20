@@ -19,6 +19,9 @@ final class VOProcessTap {
     private var deviceProcID: AudioDeviceIOProcID?
     private(set) var tapStreamDescription: AudioStreamBasicDescription?
     private var invalidationHandler: InvalidationHandler?
+    /// Stops IO callbacks as soon as `invalidate()` begins (avoids `bufferListNoCopy` UAF at call end).
+    private var acceptsIOBuffers = true
+    private let ioStateLock = NSLock()
 
     init(process: VOAudioProcess, muteWhenRunning: Bool = false) {
         self.process = process
@@ -50,6 +53,11 @@ final class VOProcessTap {
 
     func invalidate() {
         guard activated else { return }
+
+        ioStateLock.lock()
+        acceptsIOBuffers = false
+        ioStateLock.unlock()
+
         defer { activated = false }
 
         invalidationHandler?(self)
@@ -146,14 +154,25 @@ final class VOProcessTap {
             throw VOAudioError.failedToCreateAudioFormat
         }
 
+        ioStateLock.lock()
+        acceptsIOBuffers = true
+        ioStateLock.unlock()
+
         let ioBlock: AudioDeviceIOBlock = { [weak self] _, inInputData, _, _, _ in
-            guard self != nil else { return }
+            guard let self else { return }
+
+            self.ioStateLock.lock()
+            let accept = self.acceptsIOBuffers
+            self.ioStateLock.unlock()
+            guard accept else { return }
 
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, bufferListNoCopy: inInputData, deallocator: nil) else {
                 return
             }
 
-            bufferCallback(buffer)
+            // Copy before leaving the IO proc — `inInputData` is invalid after return (FaceTime hang-up, tap restart).
+            guard let owned = buffer.voxaOwnedCopy() else { return }
+            bufferCallback(owned)
         }
 
         var err = AudioDeviceCreateIOProcIDWithBlock(&deviceProcID, aggregateDeviceID, queue, ioBlock)

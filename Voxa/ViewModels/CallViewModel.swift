@@ -21,15 +21,26 @@ final class CallViewModel {
     private var refreshTimer: Timer?
     private var isMonitoringActivated = false
 
+    /// TEMPORARY (default ON): Ignore Zoom for mic-based auto-record and exclude Zoom audio from the system tap.
+    /// Remove with `ZoomCallDetectionExclusion` when no longer needed.
+    var excludeZoomFromCallDetection: Bool = true {
+        didSet {
+            guard excludeZoomFromCallDetection != oldValue else { return }
+            applyExcludeZoomFromCallDetectionSetting()
+        }
+    }
+
     var activeMicrophoneProcesses: [AudioProcess] { audioProcessManager.activeMicrophoneProcesses }
 
     private init() {
+        applyExcludeZoomFromCallDetectionSetting()
         setupNotificationObservers()
     }
 
     func activate() {
         guard !isMonitoringActivated else { return }
         isMonitoringActivated = true
+        applyExcludeZoomFromCallDetectionSetting()
         audioProcessManager.activate()
         startRefreshTimer()
         VoxaVirtualMicFeeder.shared.startIfNeeded()
@@ -81,6 +92,18 @@ final class CallViewModel {
         isManuallyStartedRecording = false
         isSettingUpRecording = false
         lastMicProcessSnapshot = nil
+    }
+
+    /// TEMPORARY: Sync Zoom exclusion to process list + live tap. Called from Settings and on activate.
+    func applyExcludeZoomFromCallDetectionSetting() {
+        audioProcessManager.excludeZoomFromMicProcessList = excludeZoomFromCallDetection
+        recorder?.setExcludeZoomFromEntireSystemTap(excludeZoomFromCallDetection)
+        if isMonitoringActivated {
+            NotificationCenter.default.post(name: .refreshProcessMonitoring, object: nil)
+        }
+        if isRecording {
+            recorder?.restartTapsForUpdatedProcessList()
+        }
     }
 
     private func setupNotificationObservers() {

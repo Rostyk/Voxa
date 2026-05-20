@@ -17,6 +17,9 @@ final class VOAudioTapManager {
     private let scanInterval: TimeInterval = 8.0
     private var changeCallback: VOAudioProcessesChangeCallback?
 
+    /// TEMPORARY: When true, Zoom processes are omitted from the entire-system tap. See `ZoomCallDetectionExclusion.swift`.
+    var excludeZoomFromEntireSystemTap = false
+
     private let systemProcessNames = [
         "corespeechd", "coreaudiod", "audiomxd", "AUHostingServiceXPC_arrow",
         "systemsoundserverd", "UserEventAgent", "WindowServer", "loginwindow",
@@ -147,8 +150,18 @@ final class VOAudioTapManager {
         do {
             var objectIDs = try VOAudioUtils.readProcessList()
             let myPID = ProcessInfo.processInfo.processIdentifier
+            let runningApps = NSWorkspace.shared.runningApplications
             objectIDs = objectIDs.filter { id in
-                (try? VOAudioUtils.readPID(objectID: id)) != myPID
+                guard (try? VOAudioUtils.readPID(objectID: id)) != myPID else { return false }
+                guard excludeZoomFromEntireSystemTap else { return true }
+                guard let process = try? VOAudioProcess(objectID: id, runningApplications: runningApps) else {
+                    return true
+                }
+                if ZoomCallDetectionExclusion.matches(process) {
+                    print("[VOAudioTapManager] TEMPORARY: excluding Zoom from entire-system tap pid=\(process.id) name=\(process.name)")
+                    return false
+                }
+                return true
             }
             if objectIDs.isEmpty {
                 return .processTapCreationFailed("No audio processes available for entire-system tap")

@@ -82,7 +82,10 @@ struct AppShellView: View {
         case .history:
             HistoryPlaceholderView()
         case .settings:
-            SettingsView(conversationViewModel: conversationViewModel)
+            SettingsView(
+                conversationViewModel: conversationViewModel,
+                callViewModel: callViewModel
+            )
         }
     }
 }

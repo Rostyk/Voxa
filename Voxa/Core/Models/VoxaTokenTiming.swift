@@ -1,7 +1,7 @@
 import Foundation
 
 /// Per-token timing from FluidAudio Parakeet (used to color transcript by diarization time).
-struct VoxaTokenTiming: Hashable, Sendable {
+struct VoxaTokenTiming: Hashable, Codable, Sendable {
     let token: String
     let startTimeSeconds: Float
     let endTimeSeconds: Float

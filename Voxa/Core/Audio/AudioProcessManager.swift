@@ -15,6 +15,9 @@ final class AudioProcessManager {
     private(set) var foregroundProcess: AudioProcess?
     private var isActivated = false
 
+    /// TEMPORARY: When true, Zoom is dropped from the mic-process list (no auto-start / not shown as call app).
+    var excludeZoomFromMicProcessList = true
+
     init() {
         sdkDetector = VoxaAudioKit()
         setupNotificationObservers()
@@ -98,7 +101,10 @@ final class AudioProcessManager {
         guard let sdkDetector else { return }
         sdkDetector.scan(onlyWithMicrophoneInput: true) { [weak self] micSDKProcesses, error in
             guard let self else { return }
-            let mappedMic = micSDKProcesses.map(self.mapProcess)
+            let mappedMic = Self.filterMicProcesses(
+                micSDKProcesses.map(self.mapProcess),
+                excludeZoom: self.excludeZoomFromMicProcessList
+            )
             let previousMicProcesses = self.activeMicrophoneProcesses
 
             self.activeAudioProcesses = mappedAudio
@@ -117,6 +123,22 @@ final class AudioProcessManager {
                     userInfo: ["processes": mappedMic]
                 )
             }
+        }
+    }
+
+    private static func filterMicProcesses(_ processes: [AudioProcess], excludeZoom: Bool) -> [AudioProcess] {
+        guard excludeZoom else { return processes }
+        return processes.filter { process in
+            let isZoom = ZoomCallDetectionExclusion.matches(
+                bundleID: process.bundleID,
+                processName: process.name
+            )
+            if isZoom {
+                print(
+                    "[AudioProcessManager] TEMPORARY: ignoring Zoom mic process pid=\(process.id) name=\(process.name)"
+                )
+            }
+            return !isZoom
         }
     }
 

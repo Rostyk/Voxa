@@ -1,7 +1,7 @@
 import Foundation
 
 /// One “who spoke when” interval from FluidAudio diarization (mapped from `TimedSpeakerSegment`).
-struct SpeakerDiarizationSegment: Identifiable, Hashable, Sendable {
+struct SpeakerDiarizationSegment: Identifiable, Hashable, Codable, Sendable {
     let id: UUID
     let speakerId: String
     let startTimeSeconds: Float

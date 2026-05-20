@@ -12,6 +12,11 @@ public final class VoxaAudioKit {
     private let tapManager = VOAudioTapManager()
     private let audioRecordingPermission = AudioRecordingPermission()
 
+    /// TEMPORARY: When true, Zoom is omitted from the entire-system tap. See `ZoomCallDetectionExclusion.swift`.
+    public var excludeZoomFromEntireSystemTap = false {
+        didSet { tapManager.excludeZoomFromEntireSystemTap = excludeZoomFromEntireSystemTap }
+    }
+
     public init() {}
 
     deinit {

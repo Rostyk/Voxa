@@ -32,7 +32,11 @@ private struct TranscriptScrollCard: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(state.history) { turn in
-                            committedTurnBubble(turn: turn, speechLocaleIdentifier: state.speechLocaleIdentifier)
+                            ConversationTurnBubbleView(
+                                turn: turn,
+                                speechLocaleIdentifier: state.speechLocaleIdentifier,
+                                speakerDiarizationEnabled: speakerDiarizationEnabled
+                            )
                                 .id(turn.id)
                         }
                         if !state.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -152,73 +156,4 @@ private struct TranscriptScrollCard: View {
         }
     }
 
-    private func committedTurnBubble(turn: ConversationTurn, speechLocaleIdentifier: String) -> some View {
-        let fluid = turn.fluidAudioText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let transcript = fluid.isEmpty ? turn.text : fluid
-        let translation = turn.gptTranslation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let diarizationReady =
-            speakerDiarizationEnabled
-            && !turn.isAwaitingDiarization
-            && !(turn.speakerSegments?.isEmpty ?? true)
-
-        return VStack(alignment: .leading, spacing: 6) {
-            Text(turn.speakerLabel)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.secondary)
-
-            if diarizationReady, let segments = turn.speakerSegments {
-                SpeakerDiarizationTimelineView(segments: segments)
-
-                if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    SpeakerColoredTranscriptText(
-                        spans: SpeakerTranscriptColorizer.transcriptSpans(
-                            transcript: transcript,
-                            speakerSegments: segments,
-                            tokenTimings: turn.fluidTokenTimings
-                        )
-                    )
-                }
-            } else if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(transcript)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else if turn.isAwaitingFluidAudio
-                || (speakerDiarizationEnabled && turn.isAwaitingDiarization) {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(
-                        speakerDiarizationEnabled && turn.isAwaitingDiarization
-                            ? "Detecting speakers…"
-                            : "Refining with FluidAudio…"
-                    )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if !translation.isEmpty {
-                Text(translation)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                CallGoalActionsView(
-                    actions: turn.gptActions,
-                    speechLocaleIdentifier: speechLocaleIdentifier
-                )
-            }
-        }
-        .padding(12)
-        .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
-        }
-    }
 }

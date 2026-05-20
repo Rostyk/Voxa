@@ -45,7 +45,7 @@ final class CaptionTranslationViewModel {
     @ObservationIgnored private let googleCaptionService: GoogleTranslateCaptionService?
 
     @ObservationIgnored private var latestRequestID: UInt64 = 0
-    /// Bumped when the conversation is cleared or recording stops so late HTTP replies never touch history.
+    /// Bumped when the conversation is cleared so late HTTP replies never touch a new call.
     @ObservationIgnored private var translationSessionGeneration: UInt64 = 0
     @ObservationIgnored private var commitTranslationInFlightCount: Int = 0
 
@@ -184,10 +184,14 @@ final class CaptionTranslationViewModel {
         translationSessionGeneration
     }
 
-    func onStoppedListening() {
-        print("[Caption] stopped listening — bump translation session")
-        translationSessionGeneration &+= 1
-        latestRequestID &+= 1
+    func onStoppedListening(preserveCommittedTranslations: Bool = false) {
+        if preserveCommittedTranslations {
+            print("[Caption] stopped listening — preserve committed translations for history")
+        } else {
+            print("[Caption] stopped listening — bump translation session")
+            translationSessionGeneration &+= 1
+            latestRequestID &+= 1
+        }
         clearLiveOutputs()
     }
 

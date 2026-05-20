@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import VoxaSDK
 
 /// Accumulates 16 kHz mono Float32 tap audio for the current live “bubble” (last commit → next commit).
 /// Resampling happens incrementally on each tap so commit is an O(1) handoff to FluidAudio.

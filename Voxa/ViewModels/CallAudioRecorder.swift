@@ -95,6 +95,11 @@ final class CallAudioRecorder {
         print("[CallAudioRecorder] restartTaps complete")
     }
 
+    /// TEMPORARY: Pass through to `VoxaAudioKit.excludeZoomFromEntireSystemTap`.
+    func setExcludeZoomFromEntireSystemTap(_ exclude: Bool) {
+        visualDetector?.excludeZoomFromEntireSystemTap = exclude
+    }
+
     private func startLiveVisualizationStream() {
         if visualDetector == nil {
             visualDetector = VoxaAudioKit()
@@ -103,15 +108,20 @@ final class CallAudioRecorder {
             print("[CallAudioRecorder] visualDetector is nil")
             return
         }
+        // TEMPORARY: Honor Zoom exclusion on the entire-system tap (see ZoomCallDetectionExclusion.swift).
+        visualDetector.excludeZoomFromEntireSystemTap = CallViewModel.shared.excludeZoomFromCallDetection
+
         let chunkSink: LocalAudioChunkWriter? = chunkWriter
         var callbackCounter = 0
         let startError = visualDetector.startLiveAudioBufferStream(.all, queue: liveBufferQueue) { [weak self] buffer in
-            self?.onLiveBuffer?(buffer)
-            chunkSink?.append(buffer: buffer)
+            // Tap may still deliver `bufferListNoCopy` wrappers; always use an owned buffer downstream.
+            guard let owned = buffer.voxaOwnedCopy() else { return }
+            self?.onLiveBuffer?(owned)
+            chunkSink?.append(buffer: owned)
             callbackCounter += 1
             let shouldProcessAudio = callbackCounter % 4 == 0
             guard shouldProcessAudio else { return }
-            let newLevels = CallAudioLevels.extractAudioLevels(from: buffer, segments: 1)
+            let newLevels = CallAudioLevels.extractAudioLevels(from: owned, segments: 1)
             DispatchQueue.main.async { [weak self] in
                 self?.updateAudioLevels(newLevels)
             }
