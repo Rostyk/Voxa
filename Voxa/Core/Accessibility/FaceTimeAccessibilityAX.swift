@@ -56,6 +56,53 @@ enum FaceTimeAccessibilityAX {
         return roots
     }
 
+    /// Narrow DTMF path: Notification Center window -> FACETIME_NOTIFICATION overlay.
+    /// Avoids scanning FaceTime menus or unrelated Notification Center application roots.
+    static func buildNotificationCenterCallRoots() throws -> [SearchRoot] {
+        guard let notificationCenter = NSRunningApplication.runningApplications(
+            withBundleIdentifier: notificationCenterBundleID
+        ).first else {
+            print("[VoxaDTMF] Notification Center (com.apple.notificationcenterui) not running")
+            throw FaceTimeDTMFAccessibility.Error.faceTimeNotRunning
+        }
+
+        print("[VoxaDTMF] Notification Center pid=\(notificationCenter.processIdentifier) narrow call roots")
+        let ncApp = AXUIElementCreateApplication(notificationCenter.processIdentifier)
+        let windows = elementsAttribute(kAXWindowsAttribute as CFString, on: ncApp) ?? []
+        print("[VoxaDTMF] NotificationCenter narrow windows=\(windows.count)")
+
+        var roots: [SearchRoot] = []
+        var seen = Set<String>()
+
+        func append(_ label: String, _ element: AXUIElement) {
+            let key = elementKey(element)
+            guard !seen.contains(key) else { return }
+            seen.insert(key)
+            roots.append(SearchRoot(label: label, element: element))
+        }
+
+        for (index, window) in windows.enumerated() {
+            let title = stringAttribute(kAXTitleAttribute as CFString, on: window) ?? ""
+            let subrole = stringAttribute(kAXSubroleAttribute as CFString, on: window) ?? ""
+            let windowLabel = "NotificationCenter/\(windowSuffix(index: index, title: title, subrole: subrole))"
+            let overlays = faceTimeNotificationOverlays(under: window)
+            for (overlayIndex, overlay) in overlays.enumerated() {
+                append("\(windowLabel)/FaceTimeOverlay[\(overlayIndex)]", overlay)
+            }
+            if overlays.isEmpty {
+                append(windowLabel, window)
+            }
+        }
+
+        guard !roots.isEmpty else {
+            print("[VoxaDTMF] NotificationCenter narrow roots empty")
+            throw FaceTimeDTMFAccessibility.Error.keypadUnavailable
+        }
+
+        print("[VoxaDTMF] NotificationCenter narrow roots=\(roots.count)")
+        return roots
+    }
+
     /// Notification Center hosts the in-call overlay (`NotificationCenterWindow` → hosted window → Keypad).
     static func buildCallUISearchRoots() throws -> [SearchRoot] {
         var roots: [SearchRoot] = []
@@ -113,8 +160,8 @@ enum FaceTimeAccessibilityAX {
         try performPress(on: match.element, label: keypadButtonTitle)
 
         let appeared = waitForDigitKeypad(
-            roots: (try? buildCallUISearchRoots()) ?? roots,
-            timeoutSeconds: 1.5
+            roots: (try? buildNotificationCenterCallRoots()) ?? roots,
+            timeoutSeconds: 0.35
         )
         if !appeared {
             print("[VoxaDTMF] digit keypad did not appear after Keypad press — post-press survey:")
@@ -137,7 +184,7 @@ enum FaceTimeAccessibilityAX {
             print("[VoxaDTMF] revealing call controls via root=\(control.rootLabel) \(describe(control.element))")
             try performPress(on: control.element, label: "communication audio")
             Thread.sleep(forTimeInterval: 0.35)
-            let refreshedRoots = (try? buildCallUISearchRoots()) ?? roots
+            let refreshedRoots = (try? buildNotificationCenterCallRoots()) ?? roots
             logSearchPlan(roots: refreshedRoots, target: "Keypad after call-control reveal")
             return findButton(titled: keypadButtonTitle, roots: refreshedRoots, logSurveyOnFailure: true)
         } catch {
@@ -608,9 +655,6 @@ enum FaceTimeAccessibilityAX {
             appendAXElements(from: value, into: &result, seen: &seen)
         }
 
-        if !result.isEmpty, isFaceTimeNotificationOverlay(element) {
-            print("[VoxaDTMF] expanded FACETIME_NOTIFICATION via discovered AX attrs children=\(result.count)")
-        }
         return result
     }
 
@@ -695,7 +739,7 @@ enum FaceTimeAccessibilityAX {
             if isDigitKeypadVisible(roots: roots) {
                 return true
             }
-            Thread.sleep(forTimeInterval: 0.08)
+            Thread.sleep(forTimeInterval: 0.02)
         }
         return isDigitKeypadVisible(roots: roots)
     }

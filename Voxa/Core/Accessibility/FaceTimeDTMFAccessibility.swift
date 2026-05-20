@@ -28,7 +28,7 @@ enum FaceTimeDTMFAccessibility {
     }
 
     private static let allowedDigits = CharacterSet(charactersIn: "0123456789*#")
-    private static let digitTapDelaySeconds: TimeInterval = 0.12
+    private static let digitTapDelaySeconds: TimeInterval = 0.04
     private static let accessibilityQueue = DispatchQueue(label: "com.aurigin.voxa.dtmf.accessibility", qos: .userInitiated)
 
     static func normalizedDigits(from string: String) -> String {
@@ -62,41 +62,22 @@ enum FaceTimeDTMFAccessibility {
             throw Error.faceTimeNotRunning
         }
 
-        var roots = try FaceTimeAccessibilityAX.buildCallUISearchRoots()
-        print("[VoxaDTMF] precheck digit keypad visible roots=\(roots.count) mainThread=\(Thread.isMainThread)")
-        let keypadAlreadyOpen = FaceTimeAccessibilityAX.isDigitKeypadVisible(roots: roots)
-        print("[VoxaDTMF] precheck digit keypad visible result=\(keypadAlreadyOpen)")
+        print(
+            "[VoxaDTMF] sendDigits sequence=\"\(digits)\" — " +
+                "AX narrow: NotificationCenter → FACETIME_NOTIFICATION → digit"
+        )
 
-        if keypadAlreadyOpen {
-            // FaceTime activation dismisses the Notification Center call overlay when digits are showing.
-            FaceTimeAccessibilityAX.activateNotificationCenterForCallUI()
-            roots = try FaceTimeAccessibilityAX.buildCallUISearchRoots()
-            roots = FaceTimeAccessibilityAX.rootsForActiveKeypad(roots)
-            print("[VoxaDTMF] digit pad already open — focus Notification Center, skip Keypad")
-        } else {
-            try FaceTimeAccessibilityAX.activateFaceTimeCallApp()
-            roots = try FaceTimeAccessibilityAX.buildCallUISearchRoots()
-            print(
-                "[VoxaDTMF] sendDigits sequence=\"\(digits)\" — " +
-                    "AX: NotificationCenter → Keypad → digits"
-            )
+        for (index, digit) in digits.enumerated() {
+            var roots = try FaceTimeAccessibilityAX.buildNotificationCenterCallRoots()
             do {
-                try FaceTimeAccessibilityAX.ensureKeypadOpen(roots: roots)
+                try FaceTimeAccessibilityAX.pressDigit(digit, roots: roots)
             } catch {
-                print("[VoxaDTMF] keypad AX path failed (\(error.localizedDescription))")
-                throw error
+                guard index == 0 else { throw error }
+                print("[VoxaDTMF] digit \(digit) not visible yet — opening Keypad via narrow roots")
+                try FaceTimeAccessibilityAX.ensureKeypadOpen(roots: roots)
+                roots = try FaceTimeAccessibilityAX.buildNotificationCenterCallRoots()
+                try FaceTimeAccessibilityAX.pressDigit(digit, roots: roots)
             }
-            roots = try FaceTimeAccessibilityAX.buildCallUISearchRoots()
-            roots = FaceTimeAccessibilityAX.rootsForActiveKeypad(roots)
-        }
-
-        for digit in digits {
-            // Fresh tree + focus before each tone (AX elements go stale after the first press).
-            FaceTimeAccessibilityAX.activateNotificationCenterForCallUI()
-            let pressRoots = FaceTimeAccessibilityAX.rootsForActiveKeypad(
-                try FaceTimeAccessibilityAX.buildCallUISearchRoots()
-            )
-            try FaceTimeAccessibilityAX.pressDigit(digit, roots: pressRoots)
             Thread.sleep(forTimeInterval: digitTapDelaySeconds)
         }
 

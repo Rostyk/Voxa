@@ -112,30 +112,32 @@ private struct CallHistoryRow: View {
     let isSelected: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(record.displayTitle)
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(2)
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(record.displayTitle)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
 
-            Text(record.timeframeText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+                Text(record.timeframeText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
 
-            Text("\(record.turns.count) bubbles")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                Text("\(record.turns.count) bubbles")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isSelected ? VoxaColors.sidebarSelection : Color.primary.opacity(0.035))
+                .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.035))
         }
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.primary.opacity(isSelected ? 0.12 : 0.06), lineWidth: 1)
+                .strokeBorder(isSelected ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.06), lineWidth: 1)
         }
     }
 }
