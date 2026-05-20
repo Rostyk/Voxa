@@ -28,13 +28,27 @@ enum FaceTimeDTMFAccessibility {
     }
 
     private static let allowedDigits = CharacterSet(charactersIn: "0123456789*#")
-    private static let digitTapDelay: Duration = .milliseconds(120)
+    private static let digitTapDelaySeconds: TimeInterval = 0.12
+    private static let accessibilityQueue = DispatchQueue(label: "com.aurigin.voxa.dtmf.accessibility", qos: .userInitiated)
 
     static func normalizedDigits(from string: String) -> String {
         String(string.unicodeScalars.filter { allowedDigits.contains($0) }.map(Character.init))
     }
 
     static func sendDigits(_ raw: String) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            accessibilityQueue.async {
+                do {
+                    try sendDigitsOnAccessibilityQueue(raw)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private static func sendDigitsOnAccessibilityQueue(_ raw: String) throws {
         guard AXIsProcessTrusted() else {
             throw Error.accessibilityNotGranted
         }
@@ -49,7 +63,9 @@ enum FaceTimeDTMFAccessibility {
         }
 
         var roots = try FaceTimeAccessibilityAX.buildCallUISearchRoots()
+        print("[VoxaDTMF] precheck digit keypad visible roots=\(roots.count) mainThread=\(Thread.isMainThread)")
         let keypadAlreadyOpen = FaceTimeAccessibilityAX.isDigitKeypadVisible(roots: roots)
+        print("[VoxaDTMF] precheck digit keypad visible result=\(keypadAlreadyOpen)")
 
         if keypadAlreadyOpen {
             // FaceTime activation dismisses the Notification Center call overlay when digits are showing.
@@ -64,7 +80,12 @@ enum FaceTimeDTMFAccessibility {
                 "[VoxaDTMF] sendDigits sequence=\"\(digits)\" — " +
                     "AX: NotificationCenter → Keypad → digits"
             )
-            try await FaceTimeAccessibilityAX.ensureKeypadOpen(roots: roots)
+            do {
+                try FaceTimeAccessibilityAX.ensureKeypadOpen(roots: roots)
+            } catch {
+                print("[VoxaDTMF] keypad AX path failed (\(error.localizedDescription))")
+                throw error
+            }
             roots = try FaceTimeAccessibilityAX.buildCallUISearchRoots()
             roots = FaceTimeAccessibilityAX.rootsForActiveKeypad(roots)
         }
@@ -76,7 +97,7 @@ enum FaceTimeDTMFAccessibility {
                 try FaceTimeAccessibilityAX.buildCallUISearchRoots()
             )
             try FaceTimeAccessibilityAX.pressDigit(digit, roots: pressRoots)
-            try await Task.sleep(for: digitTapDelay)
+            Thread.sleep(forTimeInterval: digitTapDelaySeconds)
         }
 
         print("[VoxaDTMF] Accessibility sent digits=\"\(digits)\"")

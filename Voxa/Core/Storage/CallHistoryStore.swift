@@ -13,6 +13,8 @@ final class CallHistoryStore {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
+    var historyFolderURL: URL { folderURL }
+
     private init(fileManager: FileManager = .default) {
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory

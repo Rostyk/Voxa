@@ -31,15 +31,13 @@ enum CallGoalActionExecutor {
                 }
             }
         case .dtmf, .voice:
-            VoxaVirtualMicPlaybackExecutor.dispatch {
-                performNonSpeechAction(type: actionType, content: actionContent)
-            }
+            performNonSpeechAction(type: actionType, content: actionContent)
         }
     }
 
     private static func performNonSpeechAction(type: CallGoalAction.ActionType, content: String) {
         Task.detached(priority: .userInitiated) {
-            print("[CallGoal] perform Task started type=\(type.rawValue) (background)")
+            print("[CallGoal] perform Task started type=\(type.rawValue) mainThread=\(Thread.isMainThread)")
             do {
                 switch type {
                 case .dtmf:
@@ -67,7 +65,8 @@ enum CallGoalActionExecutor {
     }
 
     private static func performDTMF(_ digits: String) async throws {
-        try await FaceTimeDTMFAccessibility.sendDigits(digits)
-        print("[CallGoal] perform dtmf path=FaceTime Accessibility")
+        let normalized = FaceTimeDTMFAccessibility.normalizedDigits(from: digits)
+        print("[CallGoal] perform dtmf path=FaceTime Accessibility digits=\"\(normalized)\"")
+        try await FaceTimeDTMFAccessibility.sendDigits(normalized)
     }
 }

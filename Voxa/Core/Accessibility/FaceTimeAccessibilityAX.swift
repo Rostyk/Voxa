@@ -23,6 +23,7 @@ enum FaceTimeAccessibilityAX {
     ]
 
     private static let maxSearchDepth = 32
+    private static let maxSearchNodes = 1_500
     private static let logSurveyMaxNodes = 250
     private static let logSurveyMaxDepth = 12
 
@@ -85,7 +86,7 @@ enum FaceTimeAccessibilityAX {
     }
 
     /// Opens the in-call keypad only when digit buttons are not already on screen.
-    static func ensureKeypadOpen(roots: [SearchRoot]) async throws {
+    static func ensureKeypadOpen(roots: [SearchRoot]) throws {
         logSearchPlan(roots: roots, target: "digit keypad visible (1,)")
 
         if let visibleRoot = roots.first(where: { findDigitButton(digit: "1", under: $0.element) != nil }) {
@@ -94,15 +95,27 @@ enum FaceTimeAccessibilityAX {
         }
 
         print("[VoxaDTMF] digit keypad not visible — searching for Keypad button")
-        guard let match = findButton(titled: keypadButtonTitle, roots: roots, logSurveyOnFailure: true) else {
-            print("[VoxaDTMF] Keypad button not found under any root (see AX survey above)")
+        var match = findButton(titled: keypadButtonTitle, roots: roots)
+        if match == nil {
+            match = revealCallControlsAndFindKeypad(roots: roots)
+        }
+
+        guard let match else {
+            print("[VoxaDTMF] Keypad button not found under any root after call-control reveal attempt")
+            print("[VoxaDTMF] final AX survey after Keypad failure:")
+            for root in (try? buildCallUISearchRoots()) ?? roots {
+                logTreeSurvey(under: root.element, rootLabel: root.label, maxDepth: logSurveyMaxDepth)
+            }
             throw FaceTimeDTMFAccessibility.Error.keypadUnavailable
         }
 
         print("[VoxaDTMF] opening Keypad via root=\(match.rootLabel) \(describe(match.element))")
         try performPress(on: match.element, label: keypadButtonTitle)
 
-        let appeared = await waitForDigitKeypad(roots: roots, timeoutSeconds: 1.5)
+        let appeared = waitForDigitKeypad(
+            roots: (try? buildCallUISearchRoots()) ?? roots,
+            timeoutSeconds: 1.5
+        )
         if !appeared {
             print("[VoxaDTMF] digit keypad did not appear after Keypad press — post-press survey:")
             for root in roots {
@@ -111,6 +124,26 @@ enum FaceTimeAccessibilityAX {
             throw FaceTimeDTMFAccessibility.Error.keypadUnavailable
         }
         print("[VoxaDTMF] digit keypad appeared after Keypad press")
+    }
+
+    private static func revealCallControlsAndFindKeypad(roots: [SearchRoot]) -> ElementMatch? {
+        print("[VoxaDTMF] Keypad not found — trying to reveal FaceTime call controls")
+        guard let control = findFaceTimeCallControl(roots: roots) else {
+            print("[VoxaDTMF] FaceTime call-control button not found")
+            return nil
+        }
+
+        do {
+            print("[VoxaDTMF] revealing call controls via root=\(control.rootLabel) \(describe(control.element))")
+            try performPress(on: control.element, label: "communication audio")
+            Thread.sleep(forTimeInterval: 0.35)
+            let refreshedRoots = (try? buildCallUISearchRoots()) ?? roots
+            logSearchPlan(roots: refreshedRoots, target: "Keypad after call-control reveal")
+            return findButton(titled: keypadButtonTitle, roots: refreshedRoots, logSurveyOnFailure: true)
+        } catch {
+            print("[VoxaDTMF] reveal call controls failed: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     static func isDigitKeypadVisible(roots: [SearchRoot]) -> Bool {
@@ -154,16 +187,16 @@ enum FaceTimeAccessibilityAX {
             roots.append(SearchRoot(label: "\(appName)/\(suffix)", element: element))
         }
 
-        append("application", application)
+        var windowRoots: [(suffix: String, element: AXUIElement)] = []
 
         if let main = elementAttribute(kAXMainWindowAttribute as CFString, on: application) {
-            append("mainWindow", main)
+            windowRoots.append(("mainWindow", main))
         } else {
             print("[VoxaDTMF] \(appName) kAXMainWindowAttribute: unavailable")
         }
 
         if let focused = elementAttribute(kAXFocusedWindowAttribute as CFString, on: application) {
-            append("focusedWindow", focused)
+            windowRoots.append(("focusedWindow", focused))
         } else {
             print("[VoxaDTMF] \(appName) kAXFocusedWindowAttribute: unavailable")
         }
@@ -174,10 +207,28 @@ enum FaceTimeAccessibilityAX {
                 let title = stringAttribute(kAXTitleAttribute as CFString, on: window) ?? ""
                 let subrole = stringAttribute(kAXSubroleAttribute as CFString, on: window) ?? ""
                 let suffix = windowSuffix(index: index, title: title, subrole: subrole)
-                append(suffix, window)
+                windowRoots.append((suffix, window))
             }
         } else {
             print("[VoxaDTMF] \(appName) kAXWindowsAttribute: unavailable or empty")
+        }
+
+        if appName == "NotificationCenter" {
+            // The FaceTime in-call card lives under the Notification Center window as
+            // an opaque FACETIME_NOTIFICATION floating-window subtree. Search it first
+            // so the menu bar does not dominate traversal and survey logs.
+            for windowRoot in windowRoots {
+                append(windowRoot.suffix, windowRoot.element)
+                for (index, overlay) in faceTimeNotificationOverlays(under: windowRoot.element).enumerated() {
+                    append("\(windowRoot.suffix)/FaceTimeOverlay[\(index)]", overlay)
+                }
+            }
+            append("application", application)
+        } else {
+            append("application", application)
+            for windowRoot in windowRoots {
+                append(windowRoot.suffix, windowRoot.element)
+            }
         }
 
         return roots
@@ -229,8 +280,62 @@ enum FaceTimeAccessibilityAX {
         return nil
     }
 
+    private static func findFaceTimeCallControl(roots: [SearchRoot]) -> ElementMatch? {
+        for root in roots where root.label.hasPrefix("FaceTime") {
+            if let element = findFirstPressable(
+                under: root.element,
+                rootLabel: root.label,
+                matches: { labels in
+                    labels.contains { label in
+                        let normalized = normalize(label)
+                        return normalized.contains("communication audio")
+                            || normalized.contains("call controls")
+                            || normalized.contains("audio call")
+                    }
+                }
+            ) {
+                return ElementMatch(element: element, rootLabel: root.label)
+            }
+        }
+        return nil
+    }
+
+    private static func findFirstPressable(
+        under root: AXUIElement,
+        rootLabel: String,
+        matches: ([String]) -> Bool
+    ) -> AXUIElement? {
+        var queue: [(element: AXUIElement, depth: Int)] = [(root, 0)]
+        var seen = Set<String>()
+        var nodesVisited = 0
+
+        while !queue.isEmpty {
+            let (element, depth) = queue.removeFirst()
+            if depth > maxSearchDepth { continue }
+
+            let key = elementKey(element)
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            nodesVisited += 1
+            if nodesVisited > maxSearchNodes {
+                print("[VoxaDTMF]     call-control search stopped at node cap=\(maxSearchNodes) root=\(rootLabel)")
+                return nil
+            }
+
+            if isPressable(element), matches(elementLabels(element)) {
+                print("[VoxaDTMF]     call-control MATCH depth=\(depth) root=\(rootLabel) \(describe(element))")
+                return element
+            }
+            for child in children(of: element) {
+                queue.append((child, depth + 1))
+            }
+        }
+        return nil
+    }
+
     private static func findButton(titled normalizedTarget: String, under root: AXUIElement, rootLabel: String) -> AXUIElement? {
         var queue: [(element: AXUIElement, depth: Int)] = [(root, 0)]
+        var seen = Set<String>()
         var nodesVisited = 0
         var buttonsLogged = 0
         let maxButtonLogs = 40
@@ -238,7 +343,15 @@ enum FaceTimeAccessibilityAX {
         while !queue.isEmpty {
             let (element, depth) = queue.removeFirst()
             if depth > maxSearchDepth { continue }
+
+            let key = elementKey(element)
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
             nodesVisited += 1
+            if nodesVisited > maxSearchNodes {
+                print("[VoxaDTMF]     end BFS root=\(rootLabel) stopped at node cap=\(maxSearchNodes) buttonsLogged=\(buttonsLogged)")
+                return nil
+            }
 
             if isPressable(element) {
                 let summary = describe(element)
@@ -275,10 +388,21 @@ enum FaceTimeAccessibilityAX {
     private static func findDigitButton(digit: Character, under root: AXUIElement) -> AXUIElement? {
         var queue: [(element: AXUIElement, depth: Int)] = [(root, 0)]
         var matches: [(element: AXUIElement, depth: Int)] = []
+        var seen = Set<String>()
+        var nodesVisited = 0
 
         while !queue.isEmpty {
             let (element, depth) = queue.removeFirst()
             if depth > maxSearchDepth { continue }
+
+            let key = elementKey(element)
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            nodesVisited += 1
+            if nodesVisited > maxSearchNodes {
+                print("[VoxaDTMF] digit \(digit) search stopped at node cap=\(maxSearchNodes)")
+                break
+            }
 
             if isPressable(element), buttonMatchesDigit(element, digit: digit), isAXEnabled(element) {
                 matches.append((element, depth))
@@ -338,11 +462,16 @@ enum FaceTimeAccessibilityAX {
     private static func logTreeSurvey(under root: AXUIElement, rootLabel: String, maxDepth: Int) {
         print("[VoxaDTMF] --- AX survey root=\(rootLabel) \(describe(root)) maxDepth=\(maxDepth) ---")
         var queue: [(element: AXUIElement, depth: Int, path: String)] = [(root, 0, rootLabel)]
+        var seen = Set<String>()
         var nodeCount = 0
 
         while !queue.isEmpty, nodeCount < logSurveyMaxNodes {
             let (element, depth, path) = queue.removeFirst()
             if depth > maxDepth { continue }
+
+            let key = elementKey(element)
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
             nodeCount += 1
 
             let indent = String(repeating: "  ", count: depth)
@@ -392,20 +521,123 @@ enum FaceTimeAccessibilityAX {
     // MARK: - Children & attributes
 
     private static func children(of element: AXUIElement) -> [AXUIElement] {
-        guard let raw = objectAttribute(kAXChildrenAttribute as CFString, on: element) else { return [] }
-        if let list = raw as? [AXUIElement] { return list }
-        if CFGetTypeID(raw) == CFArrayGetTypeID() {
-            let array = raw as! CFArray
-            let count = CFArrayGetCount(array)
-            var result: [AXUIElement] = []
-            result.reserveCapacity(count)
-            for index in 0 ..< count {
-                let value = CFArrayGetValueAtIndex(array, index)
-                result.append(unsafeBitCast(value, to: AXUIElement.self))
+        var result: [AXUIElement] = []
+        var seen = Set<String>()
+        let childAttributes: [CFString] = [
+            kAXChildrenAttribute as CFString,
+            kAXVisibleChildrenAttribute as CFString,
+            kAXContentsAttribute as CFString
+        ]
+
+        for attribute in childAttributes {
+            for child in elementsAttribute(attribute, on: element) ?? [] {
+                let key = elementKey(child)
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                result.append(child)
             }
-            return result
         }
-        return []
+
+        if result.isEmpty || isFaceTimeNotificationOverlay(element) {
+            for child in discoveredElementChildren(of: element) {
+                let key = elementKey(child)
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                result.append(child)
+            }
+        }
+        return result
+    }
+
+    private static func faceTimeNotificationOverlays(under root: AXUIElement) -> [AXUIElement] {
+        var result: [AXUIElement] = []
+        var queue: [(element: AXUIElement, depth: Int)] = [(root, 0)]
+        var seen = Set<String>()
+
+        while !queue.isEmpty {
+            let (element, depth) = queue.removeFirst()
+            if depth > logSurveyMaxDepth { continue }
+
+            let key = elementKey(element)
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+
+            if isFaceTimeNotificationOverlay(element) {
+                result.append(element)
+            }
+
+            for child in children(of: element) {
+                queue.append((child, depth + 1))
+            }
+        }
+
+        if !result.isEmpty {
+            print("[VoxaDTMF] found \(result.count) FACETIME_NOTIFICATION overlay root(s)")
+        }
+        return result
+    }
+
+    private static func isFaceTimeNotificationOverlay(_ element: AXUIElement) -> Bool {
+        let description = stringAttribute(kAXDescriptionAttribute as CFString, on: element) ?? ""
+        let subrole = stringAttribute(kAXSubroleAttribute as CFString, on: element) ?? ""
+        return description == "FACETIME_NOTIFICATION" || subrole == "AXSystemFloatingWindow"
+    }
+
+    private static func discoveredElementChildren(of element: AXUIElement) -> [AXUIElement] {
+        var names: CFArray?
+        guard AXUIElementCopyAttributeNames(element, &names) == .success, let names else { return [] }
+
+        let skipped: Set<String> = [
+            kAXParentAttribute as String,
+            kAXWindowAttribute as String,
+            kAXTopLevelUIElementAttribute as String,
+            kAXMainWindowAttribute as String,
+            kAXFocusedWindowAttribute as String
+        ]
+
+        var result: [AXUIElement] = []
+        var seen = Set<String>()
+
+        for index in 0 ..< CFArrayGetCount(names) {
+            guard let rawName = CFArrayGetValueAtIndex(names, index) else { continue }
+            let attribute = unsafeBitCast(rawName, to: CFString.self)
+            let attributeName = attribute as String
+            guard !skipped.contains(attributeName) else { continue }
+            guard let value = objectAttribute(attribute, on: element) else { continue }
+
+            appendAXElements(from: value, into: &result, seen: &seen)
+        }
+
+        if !result.isEmpty, isFaceTimeNotificationOverlay(element) {
+            print("[VoxaDTMF] expanded FACETIME_NOTIFICATION via discovered AX attrs children=\(result.count)")
+        }
+        return result
+    }
+
+    private static func appendAXElements(from value: CFTypeRef, into result: inout [AXUIElement], seen: inout Set<String>) {
+        if CFGetTypeID(value) == AXUIElementGetTypeID() {
+            let element = (value as! AXUIElement)
+            let key = elementKey(element)
+            if !seen.contains(key) {
+                seen.insert(key)
+                result.append(element)
+            }
+            return
+        }
+
+        guard CFGetTypeID(value) == CFArrayGetTypeID() else { return }
+        let array = value as! CFArray
+        for index in 0 ..< CFArrayGetCount(array) {
+            guard let item = CFArrayGetValueAtIndex(array, index) else { continue }
+            let object = unsafeBitCast(item, to: CFTypeRef.self)
+            guard CFGetTypeID(object) == AXUIElementGetTypeID() else { continue }
+            let element = unsafeBitCast(item, to: AXUIElement.self)
+            let key = elementKey(element)
+            if !seen.contains(key) {
+                seen.insert(key)
+                result.append(element)
+            }
+        }
     }
 
     private static func elementAttribute(_ attribute: CFString, on element: AXUIElement) -> AXUIElement? {
@@ -422,8 +654,11 @@ enum FaceTimeAccessibilityAX {
         if CFGetTypeID(raw) == CFArrayGetTypeID() {
             let array = raw as! CFArray
             let count = CFArrayGetCount(array)
-            return (0 ..< count).map { index in
+            return (0 ..< count).compactMap { index in
                 let value = CFArrayGetValueAtIndex(array, index)
+                guard let value else { return nil }
+                let object = unsafeBitCast(value, to: CFTypeRef.self)
+                guard CFGetTypeID(object) == AXUIElementGetTypeID() else { return nil }
                 return unsafeBitCast(value, to: AXUIElement.self)
             }
         }
@@ -454,13 +689,13 @@ enum FaceTimeAccessibilityAX {
         return false
     }
 
-    private static func waitForDigitKeypad(roots: [SearchRoot], timeoutSeconds: TimeInterval) async -> Bool {
+    private static func waitForDigitKeypad(roots: [SearchRoot], timeoutSeconds: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
             if isDigitKeypadVisible(roots: roots) {
                 return true
             }
-            try? await Task.sleep(for: .milliseconds(80))
+            Thread.sleep(forTimeInterval: 0.08)
         }
         return isDigitKeypadVisible(roots: roots)
     }

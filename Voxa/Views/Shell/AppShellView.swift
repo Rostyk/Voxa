@@ -29,6 +29,7 @@ struct AppShellView: View {
     let conversationViewModel: ConversationViewModel
 
     @State private var selection: AppSection = .liveCall
+    @State private var historyStore = CallHistoryStore.shared
 
     /// Red live-call indicator while we are capturing (not when sidebar should hide).
     private var isLiveCallActive: Bool {
@@ -56,7 +57,8 @@ struct AppShellView: View {
                     SidebarNavRow(
                         section: section,
                         isSelected: selection == section,
-                        liveCallActive: isLiveCallActive
+                        liveCallActive: isLiveCallActive,
+                        historyCount: historyStore.records.count
                     ) {
                         selection = section
                     }
@@ -69,6 +71,9 @@ struct AppShellView: View {
         }
         .frame(width: VoxaPanelStyle.sidebarWidth)
         .voxaShellBackground()
+        .onAppear {
+            historyStore.reload()
+        }
     }
 
     @ViewBuilder
@@ -94,6 +99,7 @@ private struct SidebarNavRow: View {
     let section: AppSection
     let isSelected: Bool
     let liveCallActive: Bool
+    let historyCount: Int
     let action: () -> Void
 
     var body: some View {
@@ -109,6 +115,16 @@ private struct SidebarNavRow: View {
                     .foregroundStyle(labelColor)
 
                 Spacer(minLength: 0)
+
+                if section == .history, historyCount > 0 {
+                    Text("\(historyCount)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.primary.opacity(0.08)))
+                        .accessibilityLabel("\(historyCount) saved calls")
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)

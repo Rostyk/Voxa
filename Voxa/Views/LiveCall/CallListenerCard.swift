@@ -5,6 +5,7 @@ import SwiftUI
 struct CallListenerCard: View {
     let processes: [AudioProcess]
     let isListening: Bool
+    @State private var virtualMicStatus = VoxaVirtualMicFeederStatus.shared
 
     private var statusCaption: String {
         isListening
@@ -26,6 +27,8 @@ struct CallListenerCard: View {
                     )
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                voxaMicButton
 
                 listeningBadge
             }
@@ -54,6 +57,46 @@ struct CallListenerCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(Capsule().fill(Color.primary.opacity(0.05)))
+    }
+
+    private var voxaMicButton: some View {
+        Button {
+            toggleVoxaMicOutput()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: voxaMicButtonImage)
+                    .font(.caption.weight(.semibold))
+                Text(voxaMicButtonTitle)
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.primary.opacity(0.05)))
+        }
+        .buttonStyle(.plain)
+        .help(voxaMicHelpText)
+    }
+
+    private var voxaMicButtonTitle: String {
+        virtualMicStatus.isOutputMuted ? "Unmute" : "Mute"
+    }
+
+    private var voxaMicButtonImage: String {
+        virtualMicStatus.isOutputMuted ? "mic.slash.fill" : "mic.fill"
+    }
+
+    private var voxaMicHelpText: String {
+        virtualMicStatus.isOutputMuted
+            ? "Unmute your live microphone into the Voxa virtual mic."
+            : "Mute your live microphone output to the Voxa virtual mic."
+    }
+
+    private func toggleVoxaMicOutput() {
+        let muted = virtualMicStatus.isOutputMuted
+        print("[VoxaMic] listener-card button tap muted=\(muted)")
+        VoxaVirtualMicFeeder.shared.startIfNeeded()
+        VoxaVirtualMicFeeder.shared.setOutputMuted(!muted)
     }
 
     private func processRow(_ process: AudioProcess) -> some View {

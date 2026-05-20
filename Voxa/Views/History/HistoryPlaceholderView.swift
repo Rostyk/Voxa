@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct HistoryPlaceholderView: View {
@@ -52,12 +53,12 @@ struct HistoryPlaceholderView: View {
                     .font(.title2.weight(.semibold))
                 Spacer(minLength: 8)
                 Button {
-                    historyStore.reload()
+                    NSWorkspace.shared.open(historyStore.historyFolderURL)
                 } label: {
-                    Image(systemName: "arrow.clockwise")
+                    Image(systemName: "arrow.up.forward.app")
                 }
                 .buttonStyle(.borderless)
-                .help("Reload call history")
+                .help("Open call history JSON folder in Finder")
             }
 
             if historyStore.records.isEmpty {
@@ -142,29 +143,15 @@ private struct CallHistoryRow: View {
 private struct CallHistoryDetailView: View {
     let record: CallHistoryRecord
     let historyStore: CallHistoryStore
+    @State private var isEditingTitle = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Call details")
-                    .font(.title2.weight(.semibold))
-
-                TextField(
-                    record.fallbackTitle,
-                    text: Binding(
-                        get: { record.manualTitle ?? "" },
-                        set: { historyStore.setManualTitle($0, for: record.id) }
-                    )
-                )
-                .textFieldStyle(.roundedBorder)
-                .font(.title3.weight(.semibold))
+                titleHeader
 
                 HStack(spacing: 8) {
                     Text(record.timeframeText)
-                    if let generated = record.generatedTitle,
-                       !generated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("GPT: \(generated)")
-                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -187,5 +174,41 @@ private struct CallHistoryDetailView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private var titleHeader: some View {
+        if isEditingTitle {
+            TextField(
+                record.displayTitle,
+                text: Binding(
+                    get: { record.manualTitle ?? "" },
+                    set: { historyStore.setManualTitle($0, for: record.id) }
+                )
+            )
+            .textFieldStyle(.roundedBorder)
+            .font(.title2.weight(.semibold))
+            .onSubmit {
+                isEditingTitle = false
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(record.displayTitle)
+                    .font(.title2.weight(.semibold))
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+
+                Button {
+                    isEditingTitle = true
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderless)
+                .help("Rename call")
+
+                Spacer(minLength: 0)
+            }
+        }
     }
 }

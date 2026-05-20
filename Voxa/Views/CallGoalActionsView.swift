@@ -7,8 +7,27 @@ struct CallGoalActionsView: View {
     @State private var virtualMicStatus = VoxaVirtualMicFeederStatus.shared
     @State private var accessibility = AccessibilityPermission.shared
 
+    private var visibleActions: [CallGoalAction] {
+        var seenDTMF = Set<String>()
+        return actions.compactMap { action in
+            let normalized = CallGoalAction.normalizedForExecution(type: action.type, content: action.content)
+            switch normalized.type {
+            case .voice:
+                return nil
+            case .dtmf:
+                let digits = CallGoalAction.normalizedDTMFDigits(from: normalized.content)
+                let key = digits.isEmpty ? normalized.content : digits
+                guard !key.isEmpty, !seenDTMF.contains(key) else { return nil }
+                seenDTMF.insert(key)
+                return CallGoalAction(type: .dtmf, content: key)
+            case .text:
+                return CallGoalAction(type: .text, content: normalized.content)
+            }
+        }
+    }
+
     var body: some View {
-        if !actions.isEmpty {
+        if !visibleActions.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 if let err = virtualMicStatus.lastActionError {
                     Text(err)
@@ -17,7 +36,7 @@ struct CallGoalActionsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 FlowLayout(spacing: 8) {
-                    ForEach(actions) { action in
+                    ForEach(visibleActions) { action in
                         actionControl(action)
                     }
                 }
@@ -25,10 +44,10 @@ struct CallGoalActionsView: View {
             .padding(.top, 4)
             .onAppear {
                 accessibility.refresh()
-                CallGoalActionLog.logList(actions, context: "CallGoalActionsView appeared")
+                CallGoalActionLog.logList(visibleActions, context: "CallGoalActionsView appeared")
             }
             .onChange(of: actions) { _, newActions in
-                CallGoalActionLog.logList(newActions, context: "CallGoalActionsView updated")
+                CallGoalActionLog.logList(visibleActions, context: "CallGoalActionsView updated raw=\(newActions.count)")
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 accessibility.refresh()
@@ -60,26 +79,7 @@ struct CallGoalActionsView: View {
             .help("Speak this phrase into the virtual mic")
 
         case .voice:
-            let muted = virtualMicStatus.isOutputMuted
-            Button {
-                print("[UI] tap VOICE button virtualMicMuted=\(muted)")
-                if muted {
-                    CallGoalActionExecutor.perform(action, speechLocaleIdentifier: speechLocaleIdentifier)
-                } else {
-                    print("[UI] tap VOICE → muting virtual mic output")
-                    VoxaVirtualMicFeeder.shared.setOutputMuted(true)
-                }
-            } label: {
-                Label(
-                    muted ? "Speak" : "Speaking",
-                    systemImage: "mic.fill"
-                )
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(muted ? .orange : .green)
-            .controlSize(.regular)
-            .contentShape(Rectangle())
-            .help(muted ? "Unmute your mic into the virtual mic" : "Mute virtual-mic output")
+            EmptyView()
         }
     }
 
